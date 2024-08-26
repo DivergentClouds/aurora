@@ -1,0 +1,73 @@
+Design
+-------
+  TOTAL_BLOCKS = 0x10000
+
+  BLOCK_SIZE = 2048
+
+  // BootBlock and SuperBlock
+  RESERVED_BLOCKS = 2
+
+  // 2048 / 32 = 64
+  INODES_PER_BLOCK = BLOCK_SIZE / sizeof(Inode)
+
+  // 2048 / 128 = 16
+  DIR_ENTRIES_PER_BLOCK = BLOCK_SIZE / sizeof(DirectoryEntry)
+
+  INODE_BLOCK_COUNT = ceil(SuperBlock.total_inodes / INODES_PER_BLOCK)
+  INODE_BITMAP_LEN = ceil(INODE_BLOCK_COUNT / 8)
+
+  DATA_BITMAP_LEN = ceil((TOTAL_BLOCKS - INODE_BITMAP_LEN - RESERVED_BLOCKS) / 8)
+
+  BootBlock = struct {
+    boot_code: [BLOCK_SIZE]u8,          // sets up OS, also validates SuperBlock
+  }
+
+  SuperBlock = struct {
+    magic: [8]u8 = "TundraFS",
+    version: u16 = 0,
+
+    unallocated_blocks: u16,            // number of blocks still unallocated 
+    total_inodes: u16,                  // total number of reserved inodes
+    unallocated_inodes: u16,            // number of inodes still unallocated
+
+    inode_bitmap_start: u16,            // block ptr to start of free inode bitmap
+                                        // inode_bitmap must be INODE_BITMAP_LEN blocks long
+
+    data_bitmap_start: u16,             // block ptr to start of free data block bitmap,
+                                        // must be directly after end of inode_bitmap
+                                        // data_bitmap must be DATA_BITMAP_LEN blocks long
+
+    first_inode_block: u16 = INODE_BITMAP_LEN + DATA_BITMAP_LEN + RESERVED_BLOCKS,
+    first_data_block: u16 = first_inode_block + INODE_BLOCK_COUNT,
+  }
+
+  // 32 bytes
+  Inode = struct {
+    kind: u3,                           // 0 = invalid, 1 = directory, 2 = regular file, 3 = symlink, 4+ = (reserved)
+    access_level: u1,                   // if 1, requires elevated permissions to access
+    elevated: u1,                       // if 1, this runs with elevated permissions when executed
+    readable: u1,
+    writeable: u1,
+    executable: u1,
+
+    hard_link_count: u16                // number of hard links associated with this inode, on 0, free
+    used_block_count: u16,              // number of blocks associated with this inode
+
+    file_size_upper: u8,                // upper 8 bits of file size in bytes
+    file_size_lower: u16,               // lower 16 bits of file size in bytes
+
+    direct_block_ptrs: [7]u16           // points to a data block, 0 if no block is associated
+    inderect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
+
+    reserved: [8]u8,                    // (reserved)
+  }
+
+  DirectoryBlock = struct {
+    entries: [DIR_ENTRIES_PER_BLOCK]DirectoryEntry
+  }
+
+  DirectoryEntry = struct {
+    inode_id: u16,                      // id of the attached inode, 0 if invalid entry
+    name: [126]u8,                      // null terminated
+  }
+
