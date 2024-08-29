@@ -48,7 +48,7 @@ Design
     elevated: u1,                       // if 1, this runs with elevated permissions when executed
     readable: u1,
     writeable: u1,
-    executable: u1,
+    executable: u1,                     // if this bit is set, maximum file size is 0x8000
 
     hard_link_count: u16                // number of hard links associated with this inode, on 0, free
     used_block_count: u16,              // number of blocks associated with this inode
