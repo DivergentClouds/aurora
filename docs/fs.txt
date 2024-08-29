@@ -56,10 +56,10 @@ Design
     file_size_upper: u8,                // upper 8 bits of file size in bytes
     file_size_lower: u16,               // lower 16 bits of file size in bytes
 
-    direct_block_ptrs: [7]u16           // points to a data block, 0 if no block is associated
-    inderect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
+    direct_block_ptrs: [8]u16           // points to a data block, 0 if no block is associated
+    indirect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
 
-    reserved: [8]u8,                    // (reserved)
+    reserved: [6]u8,                    // (reserved)
   }
 
   DirectoryBlock = struct {
