@@ -1,2 +1,2 @@
-*.as linguist-detectable=false
-*.inc linguist-detectable=false
+*.as linguist-language=text
+*.inc linguist-language=text
