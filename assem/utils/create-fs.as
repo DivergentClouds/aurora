@@ -264,7 +264,7 @@ strings:
   .ask_inode_count: db 'Enter the desired inode count in hexadecimal (1000-ffff, default 8000): ', \
                       0
 
-  .confirm_format_pt1: db 'Format storage device 0 with ' 0
+  .confirm_format_pt1: db 'Format storage device 0 with ', 0
   .confirm_format_pt2: db ' inodes? (y/N/x): ', 0
 
   .finished_format: db 'Formatted storage device 0', char.cr, char.lf, 0
