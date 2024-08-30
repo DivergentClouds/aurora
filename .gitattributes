@@ -1,2 +1,2 @@
-*.as linguist-language=Assembly
-*.inc linguist-detectable=Assembly
+*.as linguist-detectable=false
+*.inc linguist-detectable=false
