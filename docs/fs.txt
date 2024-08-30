@@ -30,10 +30,10 @@ Design
     total_inodes: u16,                  // total number of reserved inodes
     unallocated_inodes: u16,            // number of inodes still unallocated
 
-    inode_bitmap_start: u16,            // block ptr to start of free inode bitmap
+    inode_bitmap_start: u16,            // block ptr to start of used inode bitmap
                                         // inode_bitmap must be INODE_BITMAP_LEN blocks long
 
-    data_bitmap_start: u16,             // block ptr to start of free data block bitmap,
+    data_bitmap_start: u16,             // block ptr to start of used data block bitmap,
                                         // must be directly after end of inode_bitmap
                                         // data_bitmap must be DATA_BITMAP_LEN blocks long
 
