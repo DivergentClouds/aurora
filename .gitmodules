@@ -1,3 +1,4 @@
 [submodule "vendored/tundra"]
 	path = vendored/tundra
 	url = https://github.com/DivergentClouds/tundra
+	branch = main
