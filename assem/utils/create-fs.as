@@ -85,7 +85,6 @@ format_storage:
 
 ; Ync = enum { 0 = no, 1 = yes, 2 = cancel }
 ; read_ync(default: Ync) Ync
-; FIXME: won't register keypresses
 read_ync:
   pushi 0
   peeki a, 6
