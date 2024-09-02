@@ -14,9 +14,8 @@ Design
   DIR_ENTRIES_PER_BLOCK = BLOCK_SIZE / sizeof(DirectoryEntry)
 
   INODE_BLOCK_COUNT = ceil(SuperBlock.total_inodes / INODES_PER_BLOCK)
-  INODE_BITMAP_LEN = ceil(INODE_BLOCK_COUNT / 8)
+  INODE_BITMAP_LEN = 
 
-  DATA_BITMAP_LEN = ceil((TOTAL_BLOCKS - INODE_BITMAP_LEN - RESERVED_BLOCKS) / 8)
 
   BootBlock = struct {
     boot_code: [BLOCK_SIZE]u8,          // sets up OS, also validates SuperBlock
@@ -26,16 +25,20 @@ Design
     magic: [8]u8 = "TundraFS",
     version: u16 = 0,
 
-    unallocated_blocks: u16,            // number of blocks still unallocated 
+    unallocated_data: u16,              // number of data blocks still unallocated
     total_inodes: u16,                  // total number of reserved inodes
     unallocated_inodes: u16,            // number of inodes still unallocated
 
     inode_bitmap_start: u16,            // block ptr to start of used inode bitmap
                                         // inode_bitmap must be INODE_BITMAP_LEN blocks long
 
+    inode_bitmap_len: u16,              // ceil(INODE_BLOCK_COUNT / 8)
+
     data_bitmap_start: u16,             // block ptr to start of used data block bitmap,
                                         // must be directly after end of inode_bitmap
                                         // data_bitmap must be DATA_BITMAP_LEN blocks long
+
+    data_bitmap_len: u16,               // ceil((TOTAL_BLOCKS - RESERVED_BLOCKS - inode_bitmap_len) / 8)
 
     first_inode_block: u16 = INODE_BITMAP_LEN + DATA_BITMAP_LEN + RESERVED_BLOCKS,
     first_data_block: u16 = first_inode_block + INODE_BLOCK_COUNT,
@@ -43,6 +46,8 @@ Design
 
   // 32 bytes
   Inode = struct {
+    valid: u8,                          // 1 if inode is valid, 0 if not, all other values are illegal
+
     kind: u3,                           // 0 = directory, 1 = regular file, 2 = symlink, 3+ = (reserved)
     access_level: u1,                   // if 1, requires elevated permissions to access
     elevated: u1,                       // if 1, this runs with elevated permissions when executed
@@ -60,7 +65,7 @@ Design
     direct_block_ptrs: [8]u16           // points to a data block, 0 if no block is associated
     indirect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
 
-    reserved: [6]u8,                    // (reserved)
+    reserved: [5]u8,                    // (reserved)
   }
 
   DirectoryBlock = struct {
