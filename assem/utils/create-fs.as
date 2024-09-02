@@ -1,6 +1,9 @@
 include '../tundra-extra.inc'
 
+total_blocks = 0x10000
 block_size = 2048
+reserved_blocks = 2
+max_available_blocks = total_blocks - reserved_blocks
 inodes_per_block = 64
 dir_entires_per_block = 16
 
@@ -14,7 +17,7 @@ _start:
   mov a, *a
   cmpi a, 0
   jmpi .no_storage_error
-  
+
   .get_count:
     pushi strings.ask_inode_count
     calli puts
@@ -46,14 +49,14 @@ _start:
       calli read_ync
 
       push a
-      jeqpi a, 1, .format_storage
+      jeqpi a, 1, .do_format
       pop a
       jeqpi a, 0, .get_count
 
       ; if user cancelled, exit
       jmpi .exit
 
-  .format_storage:
+  .do_format:
     calli format_storage    ; inode count is still on stack
 
 
@@ -68,6 +71,9 @@ _start:
 
 ; format(inode_count: usize) void
 format_storage:
+  ; write to superblock ;
+  ; ------------------- ;
+
   movi a, superblock.total_inodes
   peeki b, 4
   sto a, b
@@ -76,10 +82,108 @@ format_storage:
   sto a, b
 
   movi a, superblock.inode_bitmap_start
-  stoi a, 2   ; directly after superblock
+  stoi a, reserved_blocks  ; directly after superblock
+
+  push b   ; total inodes
+  pushi inodes_per_block
+  calli div_ceil
+  
+  push a   ; INODE_BLOCK_COUNT
+
+  push a
+  pushi 8
+  calli div_ceil
+
+  push a    ; inode_bitmap_len
+
+  movi b, superblock.inode_bitmap_len
+  sto b, a
+
+  addi a, reserved_blocks
+  movi b, superblock.data_bitmap_start
+  sto b, a
+
+  peeki a, 2
+
+  neg a
+  addi a, max_available_blocks
+  push a    ; TOTAL_BLOCKS - INODE_BITMAP_LEN - RESERVED_BLOCKS
+  pushi 8
+  calli div_ceil ; DATA_BITMAP_LEN
+  
+  movi b, superblock.data_bitmap_len
+  sto b, a
+
+  pop b    ; inode_bitmap_len
+
+  add a, b
+  addi a, reserved_blocks
+  movi b, superblock.first_inode_block
+  sto b, a
+  
+  pop b     ; INODE_BLOCK_COUNT
+  add a, b
+  movi b, superblock.first_data_block
+  sto b, a
+
+  movi b, max_available_blocks
+  sub b, a    ; TOTAL_BLOCKS - RESERVED_BLOCKS - first_data_block
+  movi a, superblock.unallocated_data
+  sto a, b
+
+
+  ; store superblock ;
+  ; ---------------- ;
+
+  movi a, mmio.access_address
+  stoi a, superblock
+
+  movi a, mmio.block_index
+  stoi a, 1   ; superblock location, 0 is boot block
+  
+  movi a, mmio.write_storage
+  stoi a, 1   ; write 1 block
+
+  ; initalize bitmaps ;
+  ; ----------------- ;
+  
+  movi a, superblock.inode_bitmap_start
+  movi b, mmio.block_index
+  sto b, a
+
+  movi a, superblock.inode_bitmap_len
+  movi b, mmio.zero_storage
+  sto b, a
+
+
 
   ; TODO
 
+  reti b, 2
+
+; assumes numerator > denominator
+; get_inode_block_count(numer: usize, denom: usize) usize
+div_ceil:
+  peeki a, 6
+  push a    ; count
+  pushi 0   ; result
+
+  .loop:
+    peeki a, 4
+    peeki b, 8  ; denominator
+    sub a, b
+    pokeir 4, a
+
+    peeki b, 2
+    addi b, 1
+    pokeir 2, b
+
+    peeki b, 10
+
+    jlequri b, a, .loop
+  
+  pop a
+  dropi 2
   reti b, 2
 
 
@@ -351,7 +455,7 @@ superblock:
   .version:
     dw 0
   
-  .unallocated_blocks:
+  .unallocated_data:
     rw 1
   .total_inodes:
     rw 1
@@ -360,7 +464,12 @@ superblock:
 
   .inode_bitmap_start:
     rw 1
+  .inode_bitmap_len:
+    rw 1
+
   .data_bitmap_start:
+    rw 1
+  .data_bitmap_len:
     rw 1
 
   .first_inode_block:
@@ -370,5 +479,5 @@ superblock:
 
 
 
-  rw $ - superblock
+  rw superblock - $ + block_size
 
