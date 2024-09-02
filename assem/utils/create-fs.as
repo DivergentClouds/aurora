@@ -154,8 +154,17 @@ format_storage:
   movi a, superblock.inode_bitmap_len
   movi b, mmio.zero_storage
   sto b, a
+  
+  movi a, superblock.data_bitmap_start
+  movi b, mmio.block_index
+  sto b, a
 
+  movi a, superblock.data_bitmap_len
+  movi b, mmio.zero_storage
+  sto b, a
 
+  ; store bootblock ;
+  ; --------------- ;
 
   ; TODO
 
@@ -431,6 +440,11 @@ puts:
   reti b, 2
 
 
+; not executed, copied into block 0
+bootblock:
+  
+  rb superblock - $ + block_size
+
 strings:
   .welcome: db 'Welcome to the TundraFS version 0 disk formatting tool', \
               char.cr, char.lf, 0
@@ -479,5 +493,5 @@ superblock:
 
 
 
-  rw superblock - $ + block_size
+  rb superblock - $ + block_size
 
