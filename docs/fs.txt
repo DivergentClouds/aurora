@@ -14,13 +14,14 @@ Design
   DIR_ENTRIES_PER_BLOCK = BLOCK_SIZE / sizeof(DirectoryEntry)
 
   INODE_BLOCK_COUNT = ceil(SuperBlock.total_inodes / INODES_PER_BLOCK)
-  INODE_BITMAP_LEN = 
 
 
+  // block 0
   BootBlock = struct {
-    boot_code: [BLOCK_SIZE]u8,          // sets up OS, also validates SuperBlock
+    boot_code: [BLOCK_SIZE]u8,          // sets up for kernel, also validates SuperBlock
   }
 
+  // block 1
   SuperBlock = struct {
     magic: [8]u8 = "TundraFS",
     version: u16 = 0,
@@ -44,13 +45,14 @@ Design
     first_data_block: u16 = first_inode_block + INODE_BLOCK_COUNT,
   }
 
+Entry Formats
+-------------
+
   // 32 bytes
   Inode = struct {
-    valid: u8,                          // 1 if inode is valid, 0 if not, all other values are illegal
-
+    valid: u1,                          // 1 if inode is valid, 0 if not
     kind: u3,                           // 0 = directory, 1 = regular file, 2 = symlink, 3+ = (reserved)
     access_level: u1,                   // if 1, requires elevated permissions to access
-    elevated: u1,                       // if 1, this runs with elevated permissions when executed
     readable: u1,
     writeable: u1,
     executable: u1,                     // if this bit is set, maximum file size is 0x8000
@@ -65,7 +67,7 @@ Design
     direct_block_ptrs: [8]u16           // points to a data block, 0 if no block is associated
     indirect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
 
-    reserved: [5]u8,                    // (reserved)
+    reserved: [6]u8,                    // (reserved)
   }
 
   DirectoryBlock = struct {

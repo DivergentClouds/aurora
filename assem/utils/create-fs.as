@@ -7,6 +7,9 @@ max_available_blocks = total_blocks - reserved_blocks
 inodes_per_block = 64
 dir_entires_per_block = 16
 
+bootblock_index = 0
+superblock_index = 1
+
 _start:
   stack_init
 
@@ -59,6 +62,8 @@ _start:
   .do_format:
     calli format_storage    ; inode count is still on stack
 
+    pushi strings.finished_format
+    calli puts
 
   .exit:
     halt
@@ -139,7 +144,7 @@ format_storage:
   stoi a, superblock
 
   movi a, mmio.block_index
-  stoi a, 1   ; superblock location, 0 is boot block
+  stoi a, superblock_index
   
   movi a, mmio.write_storage
   stoi a, 1   ; write 1 block
@@ -166,7 +171,14 @@ format_storage:
   ; store bootblock ;
   ; --------------- ;
 
-  ; TODO
+  movi a, mmio.block_index
+  stoi a, bootblock_index
+  
+  movi a, mmio.access_address
+  stoi a, bootblock
+
+  movi a, mmio.write_storage
+  stoi a, 1
 
   reti b, 2
 
@@ -193,7 +205,7 @@ div_ceil:
   
   pop a
   dropi 2
-  reti b, 2
+  reti b, 4
 
 
 ; Ync = enum { 0 = no, 1 = yes, 2 = cancel }
@@ -442,8 +454,8 @@ puts:
 
 ; not executed, copied into block 0
 bootblock:
-  
-  rb superblock - $ + block_size
+  include 'bootblock.as'
+  rb bootblock - $ + block_size
 
 strings:
   .welcome: db 'Welcome to the TundraFS version 0 disk formatting tool', \
