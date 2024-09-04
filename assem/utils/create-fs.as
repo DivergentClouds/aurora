@@ -331,7 +331,9 @@ read_hex_u16:
     push a
     jeqpi a, char.cr, .end
     pop a
+    subi sp, 2  ; .backspace assumes an extra item is on the stack wrt peek/poke depths
     jeqpi a, char.bs, .backspace
+    dropi 2
     jmpi .wait_for_confirm
 
   .drop_top:
