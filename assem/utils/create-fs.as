@@ -347,13 +347,13 @@ read_hex_u16:
   .parse_char:
     push a
     jeqpi a, char.cr, .end
-
     pop a
+
     push a
     jeqpi a, char.bs, .backspace
-
     pop a
-    push a
+
+    push a ; used in .put_hex
 
     cmpi a, '0' - 1
     jmpi .drop_top
@@ -404,6 +404,11 @@ read_hex_u16:
 
     pokeir 4, a
 
+    ; erase previous character from result
+    peeki a, 2
+    andi a, 0xfff0
+    rotri a, 4
+    pokeir 2, a
 
     peeki a, 8
     subi a, 1
