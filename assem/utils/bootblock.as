@@ -26,11 +26,8 @@ stack_init
 movi a, mmio.block_index
 stoi a, superblock_index
 
-movi a, mmio.access_address
-stoi a, superblock
-
 movi a, mmio.read_storage
-stoi a, 1
+stoi a, superblock
 
 
 ; verify superblock ;
@@ -59,11 +56,8 @@ movi a, superblock.first_inode_block
 movi b, mmio.block_index
 sto b, *a
 
-movi b, mmio.access_address
-stoi b, kernel_inode_block
-
 movi a, mmio.read_storage
-stoi a, 1
+stoi a, kernel_inode_block
 
 movi a, kernel_inode_block.flags
 movb a, *a
@@ -144,14 +138,11 @@ puts:
 
 ; load_kernel_direct(direct_block_ptrs: *[8]u8) void
 load_kernel_direct:
-  movi a, kernel_base
-  movi b, mmio.access_address
-  sto b, a
-
+  pushi kernel_base   ; location to read to
   pushi 0
 
   .loop:
-    peeki a, 6
+    peeki a, 8
     mov a, *a
 
     jeqi a, 0, .end
@@ -159,14 +150,13 @@ load_kernel_direct:
     movi a, mmio.read_storage
     stoi a, 1
 
-    peeki a, 6
+    peeki a, 8
     addi a, 2
-    pokeir 6, a
+    pokeir 8, a
 
-    movi a, mmio.access_address
-    mov b, *a
+    peeki b, 4
     addi b, block_size
-    sto a, b
+    pokeir 4, b
 
     peeki a, 2
     addi a, 1

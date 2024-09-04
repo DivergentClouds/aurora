@@ -141,14 +141,11 @@ format_storage:
   ; store superblock ;
   ; ---------------- ;
 
-  movi a, mmio.access_address
-  stoi a, superblock
-
   movi a, mmio.block_index
   stoi a, superblock_index
   
   movi a, mmio.write_storage
-  stoi a, 1   ; write 1 block
+  stoi a, superblock ; store superblock
 
   ; initalize bitmaps ;
   ; ----------------- ;
@@ -175,11 +172,8 @@ format_storage:
   movi a, mmio.block_index
   stoi a, bootblock_index
   
-  movi a, mmio.access_address
-  stoi a, bootblock
-
   movi a, mmio.write_storage
-  stoi a, 1
+  stoi a, bootblock
 
   reti b, 2
 
