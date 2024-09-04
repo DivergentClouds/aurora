@@ -60,6 +60,7 @@ _start:
       jmpi .exit
 
   .do_format:
+    dropi 2
     calli format_storage    ; inode count is still on stack
 
     pushi strings.finished_format
