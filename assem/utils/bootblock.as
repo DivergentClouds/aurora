@@ -2,7 +2,7 @@ namespace bootblock
 include '../tundra-extra.inc'
 
 ; loaded in at 0xf000
-
+org 0xf000
 
 block_size = 2048
 max_size = 0xfee
