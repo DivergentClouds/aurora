@@ -4,6 +4,7 @@ total_blocks = 0x10000
 block_size = 2048
 reserved_blocks = 2
 max_available_blocks = total_blocks - reserved_blocks
+inode_size = 32
 inodes_per_block = 64
 dir_entires_per_block = 16
 
@@ -63,6 +64,8 @@ _start:
     dropi 2
     calli format_storage    ; inode count is still on stack
 
+    calli create_root
+
     pushi strings.finished_format
     calli puts
 
@@ -74,6 +77,29 @@ _start:
     calli puts
     jmpi .exit
 
+
+; create_root() void
+create_root:
+  movi a, mmio.block_index
+  stoi a, superblock.first_inode_block
+
+  movi a, mmio.write_storage
+  stoi a, root_inode_block
+
+  movi a, mmio.block_index
+  stoi a, superblock.inode_bitmap_start
+
+  movi a, mmio.read_storage
+  stoi a, first_inode_bitmap
+
+  movi a, first_inode_bitmap
+  stoi a, 0x8000 ; 1 followed by 15 0s
+
+  movi a, mmio.write_storage
+  stoi a, first_inode_bitmap
+
+  reti b, 2
+  
 
 ; format(inode_count: usize) void
 format_storage:
@@ -457,7 +483,7 @@ puts:
 ; not executed, copied into block 0
 bootblock:
   include 'bootblock.as'
-  rb bootblock - $ + block_size
+  rb $ - bootblock + block_size
 
 strings:
   .welcome: db 'Welcome to the TundraFS version 0 disk formatting tool', \
@@ -507,5 +533,33 @@ superblock:
 
 
 
-  rb superblock - $ + block_size
+  rb $ - superblock + block_size
 
+root_inode_block:
+    .flags:
+      ; valid, directory, R-X
+      db 10000101b
+    
+    .hard_link_count:
+      dw 1
+    .used_block_count:
+      dw 0
+    
+    .filesize_upper:
+      db 0
+    .filesize_lower:
+      dw 0
+    
+    .direct_block_ptrs:
+      dw 0
+      rw 7
+    .indirect_block_ptr:
+      dw 0
+
+    .reserved:
+      rb 6
+
+  rb $ - root_inode_block + block_size
+
+first_inode_bitmap:
+  rb block_size

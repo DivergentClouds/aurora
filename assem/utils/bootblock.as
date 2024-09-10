@@ -2,10 +2,10 @@ namespace bootblock
 include '../tundra-extra.inc'
 
 ; loaded in at 0xf000
-org 0xf000
 
 block_size = 2048
-max_size = 0xfee
+max_size = 0xe00
+inode_size = 32
 
 bootblock_index = 0
 superblock_index = 1
@@ -27,39 +27,39 @@ movi a, mmio.block_index
 stoi a, superblock_index
 
 movi a, mmio.read_storage
-stoi a, superblock
-
+movreli b, superblock
+sto a, b
 
 ; verify superblock ;
 ; ----------------- ;
 
-movi a, superblock
-
-
 ; magic check
 
-pushi superblock.magic
-calli check_magic
+movreli a, superblock.magic
+push a
+creli a, check_magic
 cmpi a, 0
 jmpi superblock_magic_error
 
 ; version check
 
-movi b, superblock.version
+movreli b, superblock.version
+mov b, *b
 jnei b, version, superblock_version_error
 
 
 ; verify kernel exists ;
 ; -------------------- ;
 
-movi a, superblock.first_inode_block
+movreli a, superblock.first_inode_block
 movi b, mmio.block_index
 sto b, *a
 
 movi a, mmio.read_storage
-stoi a, kernel_inode_block
+movreli b, kernel_inode_block
+sto a, b
 
-movi a, kernel_inode_block.flags
+movreli a, kernel_inode_block.flags
 movb a, *a
 rotri a, 7
 andi a, 1
@@ -78,31 +78,36 @@ stoi a, kernel_base
 
 ; load kernel ;
 ; ----------- ;
-  pushi kernel_inode_block.direct_block_ptrs
-  calli load_kernel_direct
+movreli a, kernel_inode_block.direct_block_ptrs
+push a
+creli a, load_kernel_direct
 
-  ; kernel can be at most 0x4000 bytes
+; kernel can be at most 0x4000 bytes
 
 ; jump into kernel ;
 ; ---------------- ;
-  jmpi kernel_base
+; not a jmpi because kernel_base is fixed, whereas this code is relocated
+movi pc, kernel_base
 
 
 
 superblock_magic_error:
-  pushi strings.magic_error
+  movreli a, strings.magic_error
+  push a
   jmpi error
 
 superblock_version_error:
-  pushi strings.version_error
+  movreli a, strings.version_error
+  push a
   jmpi error
 
 kernel_not_found_error:
-  pushi strings.no_kernel_error
+  movreli a, strings.no_kernel_error
+  push a
   jmpi error
 
 error:
-  calli puts
+  creli a, puts
   halt
 
 strings:
@@ -209,10 +214,12 @@ check_magic:
 data:
   .magic = 'TundraFS'
 
-
+assert $ - start < block_size
 
 virtual
   kernel_inode_block:
+    ; kernel is inode 1
+    rb inode_size
 
     .flags:
       rb 1
@@ -235,7 +242,7 @@ virtual
     .reserved:
       rb 6
 
-  rb $ - superblock + block_size
+  rb $ - kernel_inode_block + block_size
   assert $ - start < max_size
 end virtual
 

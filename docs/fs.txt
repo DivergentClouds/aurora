@@ -1,5 +1,5 @@
-Design
--------
+Layout
+------
   TOTAL_BLOCKS = 0x10000
 
   BLOCK_SIZE = 2048
@@ -52,14 +52,15 @@ Entry Formats
   Inode = struct {
     valid: u1,                          // 1 if inode is valid, 0 if not
     kind: u3,                           // 0 = directory, 1 = regular file, 2 = symlink, 3+ = (reserved)
-    access_level: u1,                   // if 1, requires elevated permissions to access
+    reserved: u1,                       // (reserved)
     readable: u1,
     writeable: u1,
-    executable: u1,                     // if this bit is set, maximum file size is 0x8000
+    executable: u1,                     // for a directory, this means it can be entered
 
     hard_link_count: u16                // number of hard links associated with this inode, on 0, free
     used_block_count: u16,              // number of blocks associated with this inode
 
+    // if a regular file is executable, it has a maximum file size of 0x8000
     file_size_upper: u8,                // upper 8 bits of file size in bytes
     file_size_lower: u16,               // lower 16 bits of file size in bytes
 
