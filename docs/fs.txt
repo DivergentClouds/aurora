@@ -1,3 +1,11 @@
+==========
+= Aurora =
+==========
+
+
+Filesystem
+==========
+
 Layout
 ------
   TOTAL_BLOCKS = 0x10000
@@ -23,11 +31,11 @@ Layout
 
   // block 1
   SuperBlock = struct {
-    magic: [8]u8 = "TundraFS",
+    magic: [8]u8 = "AuroraFS",
     version: u16 = 0,
 
     unallocated_data: u16,              // number of data blocks still unallocated
-    total_inodes: u16,                  // total number of reserved inodes
+    total_inodes: u16,                  // total number of reserved inodes, must be in the range 0x1000-0xfffe
     unallocated_inodes: u16,            // number of inodes still unallocated
 
     inode_bitmap_start: u16,            // block ptr to start of used inode bitmap
@@ -47,7 +55,6 @@ Layout
 
 Entry Formats
 -------------
-
   // 32 bytes
   Inode = struct {
     valid: u1,                          // 1 if inode is valid, 0 if not
@@ -58,25 +65,28 @@ Entry Formats
     executable: u1,                     // for a directory, this means it can be entered
 
     hard_link_count: u16                // number of hard links associated with this inode, on 0, free
-    used_block_count: u16,              // number of blocks associated with this inode
 
     // if a regular file is executable, it has a maximum file size of 0x8000
     file_size_upper: u8,                // upper 8 bits of file size in bytes
     file_size_lower: u16,               // lower 16 bits of file size in bytes
 
-    // if a null block_ptr exists, all subsequent block_ptr entries are invalid
-    direct_block_ptrs: [8]u16           // points to a data block, 0 if no block is associated
-    indirect_block_ptr: u16,            // points to a block of direct_block_ptrs, 0 if no block is associated
+    // if a null block index exists, all subsequent block index entries are invalid
+    direct_block_indices: [8]u16        // points to a data block, 0 if no block is associated
+    indirect_block_index: u16,          // points to a block of direct block indices, 0 if no block is associated
 
-    reserved: [6]u8,                    // (reserved)
+    reserved: [8]u8,                    // (reserved)
   }
 
+  // BLOCK_SIZE bytes
   DirectoryBlock = struct {
     entries: [DIR_ENTRIES_PER_BLOCK]DirectoryEntry
   }
 
+  // 128 bytes
   DirectoryEntry = struct {
-    inode_id: u16,                      // id of the attached inode, 0 if invalid entry
+    inode_id: u16,                      // id of the attached inode, or 0xffff if invalid
+                                        // if an inode_id is marked invalid, ignore all remaining entries in this block
+
     name: [126]u8,                      // null terminated
   }
 

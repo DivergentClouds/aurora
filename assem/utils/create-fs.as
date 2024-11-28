@@ -1,4 +1,5 @@
 include '../tundra-extra.inc'
+include './aurora-utils.inc'
 
 total_blocks = 0x10000
 block_size = 2048
@@ -7,6 +8,7 @@ max_available_blocks = total_blocks - reserved_blocks
 inode_size = 32
 inodes_per_block = 64
 dir_entires_per_block = 16
+filename_len = 126
 
 bootblock_index = 0
 superblock_index = 1
@@ -28,15 +30,17 @@ _start:
 
     pushi data.inode_count_str
     calli read_hex_u16
+    push a
 
     jlequi a, 0x0fff, .default_count
+    jeqi a, 0xffff, .default_count  ; disallow 0xffff inodes, so that invalid inode ids can exist
 
-    push a
     pushi data.inode_count_str
 
     jmpi .confirm_count
 
     .default_count:
+      dropi 2
       pushi 0x8000
       pushi data.default_inode_count_str
 
@@ -52,16 +56,16 @@ _start:
       pushi 0
       calli read_ync
 
-      push a
-      jeqpi a, 1, .do_format
-      pop a
-      jeqpi a, 0, .get_count
+      cmpi a, 0
+      jmpi .get_count
+
+      cmpi a, 1
+      jmpi .do_format
 
       ; if user cancelled, exit
       jmpi .exit
 
   .do_format:
-    dropi 2
     calli format_storage    ; inode count is still on stack
 
     calli create_root
@@ -70,7 +74,8 @@ _start:
     calli puts
 
   .exit:
-    halt
+    movi a, mmio.halt
+    sto a, a
 
   .no_storage_error:
     pushi strings.error_missing_device
@@ -98,10 +103,10 @@ create_root:
   movi a, mmio.write_storage
   stoi a, first_inode_bitmap
 
-  reti b, 2
+  reti 2
   
 
-; format(inode_count: usize) void
+; format(inode_count: u16) void
 format_storage:
   ; write to superblock ;
   ; ------------------- ;
@@ -201,295 +206,24 @@ format_storage:
   movi a, mmio.write_storage
   stoi a, bootblock
 
-  reti b, 2
-
-; assumes numerator > denominator
-; get_inode_block_count(numer: usize, denom: usize) usize
-div_ceil:
-  peeki a, 6
-  push a    ; count
-  pushi 0   ; result
-
-  .loop:
-    peeki a, 4
-    peeki b, 8  ; denominator
-    sub a, b
-    pokeir 4, a
-
-    peeki b, 2
-    addi b, 1
-    pokeir 2, b
-
-    peeki b, 10
-
-    jlequri b, a, .loop
-  
-  pop a
-  dropi 2
-  reti b, 4
-
-
-; Ync = enum { 0 = no, 1 = yes, 2 = cancel }
-; read_ync(default: Ync) Ync
-read_ync:
-  pushi 0
-  peeki a, 6
-  push a
-
-  .read_char:
-    movi a, mmio.read_char
-    mov a, *a
-    cmpi a, -1
-    jmpi .read_char
-
-    cmpi a, '~'
-    jmpi .parse_char
-    jmpi .read_char
-
-  .parse_char:
-    push a
-    jeqpi a, char.bs, .backspace
-    pop a
-
-    movi b, mmio.write_char
-    sto b, a
-    
-    push a
-    jeqpi a, char.cr, .enter
-    pop a
-
-    peeki b, 4
-    addi b, 1
-    pokeir 4, b
-
-    andi a, 0xdf ; make case insensitive
-
-    push a
-    jeqpi a, 'Y', .yes
-    pop a
-
-    push a
-    jeqpi a, 'N', .no
-    pop a
-
-    push a
-    jeqpi a, 'C', .cancel
-    pop a
- 
-    peeki b, 8
-    pokeir 2, b
-
-    jmpi .read_char
-
-    .yes:
-      dropi 2
-      pokei 2, 1
-      jmpi .read_char
-
-    .no:
-      dropi 2
-      pokei 2, 0
-      jmpi .read_char
-
-    .cancel:
-      dropi 2
-      pokei 2, 2
-      jmpi .read_char
-
-    .backspace:
-      dropi 2
-      peeki b, 4
-
-      cmpi b, 0
-      jmpi .read_char
-
-      subi b, 1
-      pokeir 4, b
-
-      movi b, mmio.write_char
-      stoi b, char.bs
-
-      jmpi .read_char
-
-  .enter:
-    dropi 2
-    movi b, mmio.write_char
-    stoi b, char.lf
-
-    peeki b, 4
-    jeqi b, 1, .end
-
-    ; otherwise, set to default
-    peeki b, 8
-    pokeir 2, b
-
-  .end:
-    pop a
-    dropi 2
-    reti b, 2
-
-; returns result, if 0, check if buffer[0] == 0
-; read_hex_u16(buffer: *[5]u8) bool
-read_hex_u16:
-  pushi 0  ; length counter (effectively starts at 0 due to next_char)
-  pushi 0  ; result
-
-  jmpi .read_char
-
-  .next_char:
-    peeki a, 4
-    addi a, 1
-    pokeir 4, a
-    cmpi a, 3   ; is length counter <= 3
-    jmpi .read_char
-
-  .wait_for_confirm:
-    movi a, mmio.read_char
-    mov a, *a
-    cmpi a, -1
-    jmpi .wait_for_confirm
-
-    push a
-    jeqpi a, char.cr, .end
-    pop a
-    subi sp, 2  ; .backspace assumes an extra item is on the stack wrt peek/poke depths
-    jeqpi a, char.bs, .backspace
-    dropi 2
-    jmpi .wait_for_confirm
-
-  .drop_top:
-    dropi 2
-  .read_char:
-    movi a, mmio.read_char
-    mov a, *a
-
-    cmpi a, -1
-    jmpi .read_char   ; loop if no character was read
-
-    cmpi a, '~'       ; no valid characters > '~'
-    jmpi .parse_char
-    jmpi .read_char
-
-  .parse_char:
-    push a
-    jeqpi a, char.cr, .end
-    pop a
-
-    push a
-    jeqpi a, char.bs, .backspace
-    pop a
-
-    push a ; used in .put_hex
-
-    cmpi a, '0' - 1
-    jmpi .drop_top
-
-    cmpi a, '9'
-    jmpi .digit
-
-
-    andi a, 0x1f
-    cmpi a, 0x06
-    jmpi .hex
-
-    jmpi .drop_top
-
-  .digit:
-    subi a, '0'
-    jmpi .put_hex
-
-  .hex:
-    cmpi a, 0
-    jmpi .drop_top
-    addi a, 9
-
-  .put_hex:
-    peeki b, 4
-    rotli b, 4
-    or b, a
-    pokeir 4, b
-
-    pop a   ; character typed
-    movi b, mmio.write_char
-    sto b, a
-
-    peeki b, 8
-    sto b, a
-    addi b, 1
-    pokeir 8, b
-
-    jmpi .next_char
-
-  .backspace:
-    dropi 2
-    peeki a, 4
-    subi a, 1
-
-    cmpi a, -1
-    jmpi .read_char
-
-    pokeir 4, a
-
-    ; erase previous character from result
-    peeki a, 2
-    andi a, 0xfff0
-    rotri a, 4
-    pokeir 2, a
-
-    peeki a, 8
-    subi a, 1
-    pokeir 8, a
-
-    movi a, mmio.write_char
-    stoi a, char.bs
-
-    jmpi .read_char
-
-  .end:
-    movi b, mmio.write_char
-    stoi b, char.cr
-    stoi b, char.lf
-
-    dropi 2
-    pop a
-    dropi 2
-    reti b, 2
-
-
-; puts(str: [*:0]u8) void
-puts:
-  .loop:
-    peeki b, 4
-
-    movb b, *b
-
-    cmpi b, 0
-    jmpi .end
-
-    movi a, mmio.write_char
-    sto a, b
-
-    ; str is 4 bytes deep in the stack
-    movi a, 4
-    peek b, a
-    addi b, 1
-    poke a, b
-    jmpi .loop
-
-  .end:
-  reti b, 2
+  reti 2
+
+define_div_ceil
+define_read_ync
+define_read_hex_u16
+define_puts
 
 
 ; not executed, copied into block 0
 bootblock:
   include 'bootblock.as'
-  rb $ - bootblock + block_size
+  rb block_size - ($ - bootblock)
 
 strings:
-  .welcome: db 'Welcome to the TundraFS version 0 disk formatting tool', \
+  .welcome: db 'Welcome to the AuroraFS version 0 disk formatting tool', \
               char.cr, char.lf, 0
 
-  .ask_inode_count: db 'Enter the desired inode count in hexadecimal (1000-ffff, default 8000): ', \
+  .ask_inode_count: db 'Enter the desired inode count in hexadecimal (1000-fffe, default 8000): ', \
                       0
 
   .confirm_format_pt1: db 'Format storage device 0 with 0x', 0
@@ -505,7 +239,7 @@ data:
 
 superblock:
   .magic:
-    db 'TundraFS'
+    db 'AuroraFS'
   .version:
     dw 0
   
@@ -533,33 +267,31 @@ superblock:
 
 
 
-  rb $ - superblock + block_size
+  rb block_size - ($ - superblock)
 
-root_inode_block:
-    .flags:
-      ; valid, directory, R-X
-      db 10000101b
-    
-    .hard_link_count:
-      dw 1
-    .used_block_count:
-      dw 0
-    
-    .filesize_upper:
-      db 0
-    .filesize_lower:
-      dw 0
-    
-    .direct_block_ptrs:
-      dw 0
-      rw 7
-    .indirect_block_ptr:
-      dw 0
-
-    .reserved:
-      rb 6
-
-  rb $ - root_inode_block + block_size
+root_inode_block inode_struct
+rb block_size - ($ - root_inode_block)
 
 first_inode_bitmap:
   rb block_size
+
+first_data_bitmap:
+  rb block_size
+
+root_data_block:
+  .inode_id_0: dw 0
+  .name_0:
+    db '.', 0
+    rb filename_len - ($ - .name_0)
+
+  .inode_id_1: dw 0
+  .name_1:
+    db '..', 0
+    rb filename_len - ($ - .name_1)
+  
+  .inode_id_2: dw 0xffff
+  .name_2:
+    db 0
+    rb filename_len - ($ - .name_2)
+
+  rb block_size - ($ - root_data_block)

@@ -1,16 +1,18 @@
 namespace bootblock
 include '../tundra-extra.inc'
+include './aurora-utils.inc'
 
-; loaded in at 0xf000
+; loaded in at 0xc000 (kernel_base + kernel_max_size)
 
 block_size = 2048
-max_size = 0xe00
+max_size = 0x3800 ; leave plenty of room for the stack
 inode_size = 32
 
 bootblock_index = 0
 superblock_index = 1
 version = 0
 
+kernel_max_size = 0x4000
 kernel_base = 0x8000 ; subject to change
 
 
@@ -37,7 +39,10 @@ sto a, b
 
 movreli a, superblock.magic
 push a
-creli a, check_magic
+movreli a, strings.magic
+push a
+creli streql
+
 cmpi a, 0
 jmpi superblock_magic_error
 
@@ -48,203 +53,172 @@ mov b, *b
 jnei b, version, superblock_version_error
 
 
-; verify kernel exists ;
-; -------------------- ;
+; load `/` ;
+; -------- ;
 
 movreli a, superblock.first_inode_block
 movi b, mmio.block_index
 sto b, *a
 
 movi a, mmio.read_storage
-movreli b, kernel_inode_block
+movreli b, inode_block
 sto a, b
 
-movreli a, kernel_inode_block.flags
-movb a, *a
-rotri a, 7
-andi a, 1
-cmpi a, 0   ; if kernel is invalid
-jmpi kernel_not_found_error ; then error
+movreli a, inode_block.flags
+mov a, *a
+andi a, 0xf0              ; we are only looking at the upper nybble of the flags byte
+jeqpi a, 0x80, load_boot  ; jump if valid flag is set and kind is directory
+jmpi root_not_found_error ; otherwise, error
+
+; find `/boot` ;
+; ------------ ;
+
+load_boot:
+
+; since `/` is inode 0, we know it is at the start of the block
+movreli a, inode_block.direct_block_indices
+push a
+
+movreli a, inode_block.indirect_block_index
+push a
+
+; do not use movreli as `directory` is not relative to program base
+pushi directory.contents
+pushi directory.indirect_block_indices
+
+movreli a, strings.boot_dir_name
+push a
+
+creli find_in_dir
+
+mov b, a  ; do not clobber find_in_dir result
+jeqi b, 0xffff, boot_not_found_error
+
+; load `/boot` ;
+; ------------ ;
+
+push a  ; inode id
+
+movreli a, inode_block
+push a
+
+creli load_inode
+
+; find `/boot/kernel` ;
+; ------------------- ;
+
+mov b, a  ; a is boot directory inode pointer
+addi b, inode_offsets.direct_block_indices
+push b
+
+mov b, a  ; a is boot directory inode pointer
+addi b, inode_offsets.indirect_block_index
+
+; do not use movreli as `directory` is not relative to program base
+pushi directory.contents
+pushi directory.indirect_block_indices
+
+movreli a, strings.kernel_file_name
+push a
+
+creli find_in_dir
+
+; load kernel ;
+; ----------- ;
+
+mov b, a  ; a is `/boot/kernel` inode pointer
+addi b, inode_offsets.filesize_upper
+movb b, *b
+jnei b, 0, kernel_too_large_error
+
+mov b, a  ; a is `/boot/kernel` inode pointer
+addi b, inode_offsets.filesize_lower
+mov b, *b
+jgtui b, kernel_max_size - 1, kernel_too_large_error
+
+addi a, inode_offsets.direct_block_indices
+push a
+pushi kernel_base
+
+creli load_file_direct
+
 
 
 ; set up for kernel ;
 ; ----------------- ;
 
+; NOTE: kernel must set up interrupt address
+
 movi a, mmio.boundary_address
 stoi a, kernel_base
 
-; let kernel set interrupt address
-
-
-; load kernel ;
-; ----------- ;
-movreli a, kernel_inode_block.direct_block_ptrs
-push a
-creli a, load_kernel_direct
-
-; kernel can be at most 0x4000 bytes
-
 ; jump into kernel ;
 ; ---------------- ;
-; not a jmpi because kernel_base is fixed, whereas this code is relocated
-movi pc, kernel_base
 
+jabsi kernel_base
 
 
 superblock_magic_error:
   movreli a, strings.magic_error
-  push a
   jmpi error
 
 superblock_version_error:
   movreli a, strings.version_error
-  push a
+  jmpi error
+
+root_not_found_error:
+  movreli a, strings.no_root_error
+  jmpi error
+
+boot_not_found_error:
+  movreli a, strings.no_boot_error
   jmpi error
 
 kernel_not_found_error:
   movreli a, strings.no_kernel_error
-  push a
+  jmpi error
+
+kernel_too_large_error:
+  movreli a, strings.large_kernel_error
   jmpi error
 
 error:
-  creli a, puts
-  halt
+  push a
+  creli puts
+  movi a, mmio.halt
+  sto a, a
+
 
 strings:
   .magic_error:
     db 'ERROR: filesystem invalid magic', char.cr, char.lf, 0
   .version_error:
     db 'ERROR: filesystem version mismatch', char.cr, char.lf, 0
- .no_kernel_error:
+  .no_root_error:
+    db 'ERROR: root directory not found', char.cr, char.lf, 0
+  .no_boot_error:
+    db 'ERROR: boot directory not found', char.cr, char.lf, 0
+  .no_kernel_error:
     db 'ERROR: kernel not found', char.cr, char.lf, 0
+  .large_kernel_error:
+    db 'ERROR: kernel too large', char.cr, char.lf, 0
 
-; puts(str: [*:0]u8) void
-puts:
-  .loop:
-    peeki b, 4
+  .magic:
+    db 'AuroraFS', 0
+  .kernel_file_name:
+    db 'kernel', 0
+  .boot_dir_name:
+    db 'boot', 0
 
-    movb b, *b
+define_puts
+define_streql
+define_div_floor_rem
+define_find_in_dir
+define_load_inode
+define_load_file_direct
 
-    cmpi b, 0
-    jmpi .end
-
-    movi a, mmio.write_char
-    sto a, b
-
-    ; str is 4 bytes deep in the stack
-    movi a, 4
-    peek b, a
-    addi b, 1
-    poke a, b
-    jmpi .loop
-
-  .end:
-  reti b, 2
-
-; load_kernel_direct(direct_block_ptrs: *[8]u8) void
-load_kernel_direct:
-  pushi kernel_base   ; location to read to
-  pushi 0
-
-  .loop:
-    peeki a, 8
-    mov a, *a
-
-    jeqi a, 0, .end
-
-    movi a, mmio.read_storage
-    stoi a, 1
-
-    peeki a, 8
-    addi a, 2
-    pokeir 8, a
-
-    peeki b, 4
-    addi b, block_size
-    pokeir 4, b
-
-    peeki a, 2
-    addi a, 1
-    pokeir 2, a
-    cmpi a, 7
-    jmpi .loop
-
-  .end:
-    dropi 2
-    reti b, 2
-
-
-; check_magic(ptr: *[8]) bool
-check_magic:
-  pushi 0   ; array index
-
-  .loop:
-    peeki a, 6
-    peeki b, 2
-    add a, b
-    movb a, *a
-
-    push a
-
-    movi a, data.magic
-    peeki b, 4
-    add a, b
-    movb a, *a
-
-    pop b
-
-    jneri a, b, .fail
-
-    peeki a, 2
-    cmpi a, 7   ; is index <= 7
-    jmpi .loop  ; if so, jump to .loop
-
-  .success:
-    movi a, 1
-    jmpi .end
-
-  .fail:
-    movi a, 0
-
-  .end:
-    dropi 2
-    reti b, 2
-
-
-data:
-  .magic = 'TundraFS'
-
+; make sure bootblock fits in a block
 assert $ - start < block_size
-
-virtual
-  kernel_inode_block:
-    ; kernel is inode 1
-    rb inode_size
-
-    .flags:
-      rb 1
-    
-    .hard_link_count:
-      rw 1
-    .used_block_count:
-      rw 1
-    
-    .filesize_upper:
-      rb 1
-    .filesize_lower:
-      rw 1
-    
-    .direct_block_ptrs:
-      rw 8
-    .indirect_block_ptr:
-      rw 1
-
-    .reserved:
-      rb 6
-
-  rb $ - kernel_inode_block + block_size
-  assert $ - start < max_size
-end virtual
 
 virtual
   superblock:
@@ -277,6 +251,24 @@ virtual
 
 
   rb $ - superblock + block_size
+
+  inode_block inode_struct
+  rb $ - inode_block + block_size ; reserve rest of block
+  
   assert $ - start < max_size
 end virtual
+
+
+virtual at 0
+  directory:
+  .contents:
+    rb block_size
+
+  .indirect_block_indices:
+    rb block_size
+end virtual
+
+; use as constants, not addresses
+create_virtual_inode inode_offsets, 0
+
 end namespace
