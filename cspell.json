@@ -1,0 +1,16 @@
+{
+  "import": [
+    "./vendored/tundra/cspell.json"
+  ],
+  "flagWords": [],
+  "ignoreRegExpList": [
+    "/[A-Z][A-Z]+/"
+  ],
+  "ignoreWords": [],
+  "language": "en",
+  "version": "0.2",
+  "words": [
+    "inode",
+    "inodes"
+  ]
+}
