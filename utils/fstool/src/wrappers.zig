@@ -1,9 +1,7 @@
 const std = @import("std");
 const afs = @import("aurora-fs.zig");
 
-pub fn main() !void {}
-
-fn changeDirPerms(
+pub fn changeDirPerms(
     storage: std.fs.File,
     path: []const u8,
     permissions: afs.Inode.Permissions,
@@ -14,17 +12,14 @@ fn changeDirPerms(
 
     const root = try afs.Dir.root(superblock, storage);
 
-    const path_z = try allocator.dupeZ(u8, path);
-    defer allocator.free(path);
-
-    var dir = try root.openDirPath(path_z, superblock, storage, allocator);
+    var dir = try root.openDirPath(path, superblock, storage, allocator);
 
     var inode = dir.inode();
     inode.setPermissions(permissions);
     try inode.write(superblock, storage);
 }
 
-fn changeFilePerms(
+pub fn changeFilePerms(
     storage: std.fs.File,
     path: []const u8,
     permissions: afs.Inode.Permissions,
@@ -42,12 +37,12 @@ fn changeFilePerms(
     try inode.write(superblock, storage);
 }
 
-fn printInfo(
+pub fn printInfo(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
 ) !void {
-    var superblock = try afs.SuperBlock.read(storage);
+    const superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
     const root = try afs.Dir.root(superblock, storage);
@@ -62,16 +57,31 @@ fn printInfo(
     );
 }
 
-fn listDir(
+pub fn listDir(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
 ) !void {
-    // TODO:
+    const superblock = try afs.SuperBlock.read(storage);
+    try superblock.verify();
+
+    const root = try afs.Dir.root(superblock, storage);
+
+    var entry_block_buffer: [afs.common.block_size]u8 = @splat(0);
+    var indirect_block_buffer: [afs.common.block_size]u8 = @splat(0);
+
+    const dir = try root.openDirPath(path, superblock, storage, allocator);
+
+    var entry_iterator = try dir.entryIterator(&entry_block_buffer, &indirect_block_buffer, storage);
+
+    const stdout = std.io.getStdOut().writer();
+    while (try entry_iterator.next()) |entry| {
+        try stdout.print("{}\n", entry);
+    }
 }
 
 /// may only delete empty directories
-fn deleteDir(
+pub fn deleteDir(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
@@ -95,7 +105,7 @@ fn deleteDir(
     try parent_dir.deleteDir(dir_name, &superblock, storage);
 }
 
-fn deleteFile(
+pub fn deleteFile(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
@@ -118,7 +128,7 @@ fn deleteFile(
     try parent_dir.deleteFile(file_name_z, &superblock, storage);
 }
 
-fn writeFile(
+pub fn writeFile(
     storage: std.fs.File,
     input_file_name: []const u8,
     output_path: []const u8,
@@ -172,7 +182,7 @@ fn writeFile(
     try output_file.write(input_file_contents, &superblock, storage);
 }
 
-fn format(
+pub fn format(
     storage: std.fs.File,
     bootblock_name: ?[]const u8,
     inode_count: ?u16,

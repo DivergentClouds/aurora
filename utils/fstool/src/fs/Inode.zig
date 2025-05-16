@@ -255,20 +255,28 @@ pub const Inode = union(enum) {
             writer: anytype,
         ) !void {
             try writer.print(
-                \\id: {x:0>4}
+                \\inode id: {x:0>4}
                 \\kind: {s}
                 \\permissions: {}
-                \\hard link count: {x:0>4}
-                \\file_size: {x:0>6}
+                \\hard link count: {d}
             ,
                 .{
                     inode.id,
-                    inode.kind,
+                    @tagName(inode.kind),
                     inode.getPermissions(),
                     inode.hard_link_count,
-                    inode.fileSize(),
                 },
             );
+
+            if (inode.kind == .file) {
+                try writer.print(
+                    \\file size: {x:0>6}
+                ,
+                    .{
+                        inode.fileSize(),
+                    },
+                );
+            }
         }
     };
 

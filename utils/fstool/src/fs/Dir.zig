@@ -911,6 +911,16 @@ pub const Dir = union(enum) {
 
                 return true;
             }
+
+            pub fn format(
+                entry: Entry.Version0,
+                _: []const u8,
+                _: std.fmt.FormatOptions,
+                writer: anytype,
+            ) !void {
+                const len = std.mem.indexOfScalar(u8, entry.name, 0) orelse Entry.Version0.name_len;
+                try writer.writeAll(entry.name[0..len]);
+            }
         };
 
         pub fn init(
@@ -957,6 +967,20 @@ pub const Dir = union(enum) {
             return switch (entry) {
                 inline else => |entry_version| entry_version.eql(name),
             };
+        }
+
+        pub fn format(
+            entry: Entry,
+            _: []const u8,
+            _: std.fmt.FormatOptions,
+            writer: anytype,
+        ) !void {
+            switch (entry) {
+                inline else => |entry_version| try writer.print(
+                    "{}",
+                    .{entry_version},
+                ),
+            }
         }
     };
 };
