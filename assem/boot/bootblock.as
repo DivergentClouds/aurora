@@ -1,6 +1,6 @@
 namespace bootblock
 include '../tundra-extra.inc'
-include './aurora-utils.inc'
+include '../utils/aurora-utils.inc'
 
 ; loaded in at 0xc000 (kernel_base + kernel_max_size)
 
