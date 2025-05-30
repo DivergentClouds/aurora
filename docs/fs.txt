@@ -60,6 +60,8 @@ Entry Formats
     valid: u1,                          // 1 if inode is valid, 0 if not
     kind: u3,                           // 0 = directory, 1 = regular file, 2 = symlink, 3+ = (reserved)
     reserved: u1,                       // (reserved)
+
+    // directory permissions do not apply to root
     readable: u1,
     writeable: u1,
     executable: u1,                     // for a directory, this means it can be entered
