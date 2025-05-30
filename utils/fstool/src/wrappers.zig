@@ -1,7 +1,7 @@
 const std = @import("std");
 const afs = @import("aurora-fs.zig");
 
-pub fn changeDirPerms(
+pub fn changePerms(
     storage: std.fs.File,
     path: []const u8,
     permissions: afs.Inode.Permissions,
@@ -12,27 +12,7 @@ pub fn changeDirPerms(
 
     const root = try afs.Dir.root(superblock, storage);
 
-    var dir = try root.openDirPath(path, superblock, storage, allocator);
-
-    var inode = dir.inode();
-    inode.setPermissions(permissions);
-    try inode.write(superblock, storage);
-}
-
-pub fn changeFilePerms(
-    storage: std.fs.File,
-    path: []const u8,
-    permissions: afs.Inode.Permissions,
-    allocator: std.mem.Allocator,
-) !void {
-    var superblock = try afs.SuperBlock.read(storage);
-    try superblock.verify();
-
-    const root = try afs.Dir.root(superblock, storage);
-
-    const file = try root.openFilePath(path, superblock, storage, allocator);
-
-    var inode = file.inode();
+    var inode = try root.openInodePath(path, superblock, storage, allocator);
     inode.setPermissions(permissions);
     try inode.write(superblock, storage);
 }
@@ -51,10 +31,7 @@ pub fn printInfo(
 
     const stdout = std.io.getStdOut().writer();
 
-    try stdout.print(
-        "{}\n",
-        .{inode},
-    );
+    try stdout.print("{}\n", .{inode});
 }
 
 pub fn listDir(
@@ -76,12 +53,11 @@ pub fn listDir(
 
     const stdout = std.io.getStdOut().writer();
     while (try entry_iterator.next()) |entry| {
-        try stdout.print("{}\n", entry);
+        try stdout.print("{}\n", .{entry});
     }
 }
 
-/// may only delete empty directories
-pub fn deleteDir(
+pub fn delete(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
@@ -91,6 +67,24 @@ pub fn deleteDir(
 
     const root = try afs.Dir.root(superblock, storage);
 
+    const inode = try root.openInodePath(path, superblock, storage, allocator);
+
+    switch (inode.kind()) {
+        .directory => try deleteDir(storage, path, allocator, &superblock, root),
+        .file => try deleteDir(storage, path, allocator, &superblock, root),
+        .symlink => return error.SymlinksNotImplimented,
+        _ => return error.UnknownInodeKind,
+    }
+}
+
+/// may only delete empty directories
+fn deleteDir(
+    storage: std.fs.File,
+    path: []const u8,
+    allocator: std.mem.Allocator,
+    superblock: *afs.SuperBlock,
+    root: afs.Dir,
+) !void {
     const end_index = if (path[path.len - 1] == '/')
         path.len - 1
     else
@@ -100,21 +94,19 @@ pub fn deleteDir(
 
     const parent_dir_path = path[0..parent_dir_path_index];
     const dir_name = path[parent_dir_path_index..];
+    const dir_name_z = try allocator.dupeZ(u8, dir_name);
 
-    var parent_dir = try root.openDirPath(parent_dir_path, superblock, storage, allocator);
-    try parent_dir.deleteDir(dir_name, &superblock, storage);
+    var parent_dir = try root.openDirPath(parent_dir_path, superblock.*, storage, allocator);
+    try parent_dir.deleteDir(dir_name_z, superblock, storage);
 }
 
-pub fn deleteFile(
+fn deleteFile(
     storage: std.fs.File,
     path: []const u8,
     allocator: std.mem.Allocator,
+    superblock: *afs.SuperBlock,
+    root: afs.Dir,
 ) !void {
-    var superblock = try afs.SuperBlock.read(storage);
-    try superblock.verify();
-
-    const root = try afs.Dir.root(superblock, storage);
-
     const parent_dir_path_index = std.mem.lastIndexOfScalar(u8, path, '/') orelse 0;
 
     const parent_dir_path = path[0..parent_dir_path_index];
@@ -123,14 +115,15 @@ pub fn deleteFile(
     const file_name_z = try allocator.dupeZ(u8, file_name);
     defer allocator.free(file_name_z);
 
-    var parent_dir = try root.openDirPath(parent_dir_path, superblock, storage, allocator);
+    var parent_dir = try root.openDirPath(parent_dir_path, superblock.*, storage, allocator);
 
-    try parent_dir.deleteFile(file_name_z, &superblock, storage);
+    try parent_dir.deleteFile(file_name_z, superblock, storage);
 }
 
-pub fn writeFile(
+/// creates directories as needed, copying the permissions of the previous directory
+pub fn storeFile(
     storage: std.fs.File,
-    input_file_name: []const u8,
+    input_path: []const u8,
     output_path: []const u8,
     file_permissions: afs.Inode.Permissions,
     allocator: std.mem.Allocator,
@@ -145,7 +138,7 @@ pub fn writeFile(
         if (path_tokens.peek() == null)
             break subpath;
 
-        const subpath_z = allocator.dupeZ(subpath);
+        const subpath_z = try allocator.dupeZ(u8, subpath);
         defer allocator.free(subpath_z);
 
         const dir_permissions = dir.inode().getPermissions();
@@ -157,23 +150,23 @@ pub fn writeFile(
                 &superblock,
                 storage,
             );
-    };
+    } else unreachable; // path_tokens.peek() will eventually result in null and cause the loop to break
 
-    const output_name_z = allocator.dupeZ(output_name);
+    const output_name_z = try allocator.dupeZ(u8, output_name);
     defer allocator.free(output_name_z);
 
-    if (try dir.openFile(output_name, superblock, storage) != null) {
-        dir.deleteFile(output_name_z, &superblock, storage);
+    if (try dir.openFile(output_name_z, superblock, storage) != null) {
+        try dir.deleteFile(output_name_z, &superblock, storage);
     }
 
-    const output_file = try dir.createFile(
+    var output_file = try dir.createFile(
         output_name_z,
         file_permissions,
         &superblock,
         storage,
     );
 
-    const input_file = try std.fs.cwd().openFile(input_file_name, .{});
+    const input_file = try std.fs.cwd().openFile(input_path, .{});
     defer input_file.close();
 
     const input_file_contents = try input_file.readToEndAlloc(allocator, std.math.maxInt(u27));
@@ -182,10 +175,45 @@ pub fn writeFile(
     try output_file.write(input_file_contents, &superblock, storage);
 }
 
+/// read contents of the file at `input_path` in `storage` into the file
+/// `output_path` on the host disk
+pub fn loadFile(
+    storage: std.fs.File,
+    input_path: []const u8,
+    output_path: []const u8,
+    allocator: std.mem.Allocator,
+) !void {
+    var superblock = try afs.SuperBlock.read(storage);
+    try superblock.verify();
+
+    const root = try afs.Dir.root(superblock, storage);
+
+    const input_file = try root.openFilePath(input_path, superblock, storage, allocator);
+    const file_contents = try input_file.read(storage, allocator);
+
+    const output_file = try std.fs.cwd().createFile(output_path, .{});
+    defer output_file.close();
+
+    try output_file.writeAll(file_contents);
+}
+
+pub fn createDir(
+    storage: std.fs.File,
+    path: []const u8,
+    permissions: afs.Inode.Permissions,
+    allocator: std.mem.Allocator,
+) !void {
+    var superblock = try afs.SuperBlock.read(storage);
+    try superblock.verify();
+
+    const root = try afs.Dir.root(superblock, storage);
+    _ = try root.createDirPath(path, permissions, &superblock, storage, allocator);
+}
+
 pub fn format(
     storage: std.fs.File,
-    bootblock_name: ?[]const u8,
     inode_count: ?u16,
+    bootblock_name: []const u8,
 ) !void {
     const reserved_blocks = 2;
     const total_blocks = 0x10000;
@@ -193,17 +221,12 @@ pub fn format(
     const default_inode_count = 0x8000;
     const inode_bitmap_start = reserved_blocks;
 
-    const default_bootblock = @embedFile("bootblock.bin");
-
     var bootblock: [afs.common.block_size]u8 = @splat(0);
-    if (bootblock_name) |name| {
-        const bootblock_file = try std.fs.cwd().openFile(name, .{});
-        defer bootblock_file.close();
 
-        _ = try bootblock_file.reader().readAll(&bootblock);
-    } else {
-        @memcpy(&bootblock, default_bootblock);
-    }
+    const bootblock_file = try std.fs.cwd().openFile(bootblock_name, .{});
+    defer bootblock_file.close();
+
+    _ = try bootblock_file.reader().readAll(&bootblock);
 
     const total_inodes = if (inode_count) |count|
         if (count == 0xffff)
@@ -225,7 +248,7 @@ pub fn format(
 
     var superblock: afs.SuperBlock = .{
         .@"0" = .{
-            .magic = "AuroraFS",
+            .magic = "AuroraFS".*,
             .version = 0,
 
             .unallocated_data = unallocated_data,
@@ -247,7 +270,7 @@ pub fn format(
     try superblock.write(storage);
 
     try storage.seekTo(afs.common.bootblock_address);
-    try storage.writeAll(bootblock);
+    try storage.writeAll(&bootblock);
 
     // create root directory
     var root_inode: afs.Inode = .{

@@ -114,7 +114,7 @@ pub const SuperBlock = union(enum) {
 
         switch (superblock) {
             inline else => |superblock_version| {
-                if (!std.mem.eql(u8, superblock_version.magic, magic))
+                if (!std.mem.eql(u8, &superblock_version.magic, magic))
                     return error.InvalidSuperblock;
             },
         }

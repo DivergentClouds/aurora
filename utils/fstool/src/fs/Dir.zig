@@ -232,9 +232,9 @@ pub const Dir = union(enum) {
             storage: std.fs.File,
         ) !void {
             var child_dir = try Dir.openDir(.{ .@"0" = dir }, name, superblock.*, storage) orelse
-                error.DirectoryNotFound;
+                return error.DirectoryNotFound;
 
-            if (!try child_dir.isEmpty(storage))
+            if (!try child_dir.@"0".isEmpty(storage))
                 return error.DirectoryNotEmpty;
 
             const entry_address = try dir.findEntryAddress(
@@ -406,11 +406,11 @@ pub const Dir = union(enum) {
             return .{ .@"0" = .{ .inode = dir_inode } };
         }
 
-        fn isEmpty(dir: Version0, storage: std.fs.File) bool {
+        fn isEmpty(dir: Version0, storage: std.fs.File) !bool {
             var entry_block_buffer: [common.block_size]u8 = undefined;
             var indirect_block_buffer: [common.block_size]u8 = undefined;
 
-            var dir_iterator = try dir.entryIterator(&entry_block_buffer, &indirect_block_buffer, storage);
+            var dir_iterator = try (Dir{ .@"0" = dir }).entryIterator(&entry_block_buffer, &indirect_block_buffer, storage);
 
             while (try dir_iterator.next()) |entry| {
                 if (!entry.eql("..") and !entry.eql("."))
@@ -576,7 +576,7 @@ pub const Dir = union(enum) {
         const parent_dir_path = path[0..parent_dir_path_index];
         const name = path[parent_dir_path_index..];
 
-        const name_z = allocator.dupeZ(u8, name);
+        const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
 
         var parent_dir = try dir.openDirPath(parent_dir_path, superblock, storage, allocator);
@@ -687,6 +687,29 @@ pub const Dir = union(enum) {
         }
     }
 
+    /// Create the directory at the given path, starting from `dir`.
+    pub fn createDirPath(
+        dir: Dir,
+        path: []const u8,
+        permissions: Inode.Permissions,
+        superblock: *SuperBlock,
+        storage: std.fs.File,
+        allocator: std.mem.Allocator,
+    ) !Dir {
+        var current_dir = dir;
+
+        var path_iterator = std.mem.tokenizeScalar(u8, path, '/');
+        while (path_iterator.next()) |subpath| {
+            const subpath_z = try allocator.dupeZ(u8, subpath);
+            defer allocator.free(subpath_z);
+
+            current_dir = try current_dir.openDir(subpath_z, superblock.*, storage) orelse
+                try current_dir.createDir(subpath_z, permissions, superblock, storage);
+        }
+
+        return current_dir;
+    }
+
     pub fn inode(dir: Dir) Inode {
         return switch (dir) {
             inline else => |dir_version| dir_version.inode,
@@ -716,7 +739,7 @@ pub const Dir = union(enum) {
             dir: Dir.Version0,
             index: usize,
             entries_block: ?Block,
-            entry_index_in_block: std.math.IntFittingRange(0, Entry.Version0.entries_per_block - 1),
+            entry_index_in_block: usize,
             block_index_iterator: Inode.BlockIndexIterator,
             storage: std.fs.File,
 
@@ -732,7 +755,7 @@ pub const Dir = union(enum) {
                 else
                     try Block.read(
                         entry_block_buffer,
-                        first_entry_block_index.direct_block_indices[0],
+                        first_entry_block_index,
                         storage,
                     );
 
@@ -753,7 +776,7 @@ pub const Dir = union(enum) {
 
                 if (entry != null) {
                     if (iterator.entry_index_in_block >= Entry.Version0.entries_per_block) {
-                        try Block.read(
+                        iterator.entries_block = try Block.read(
                             iterator.entries_block.?.contents,
                             iterator.block_index_iterator.next() orelse
                                 return null,
@@ -779,7 +802,7 @@ pub const Dir = union(enum) {
                     Entry.Version0.entry_size];
 
                 const entry = Entry.Version0.init(entry_memory) catch |err| switch (err) {
-                    error.UnsupportedVersion => unreachable,
+                    error.InvalidEntryBufferSize => unreachable,
                 };
 
                 if (entry.@"0".inode_id == 0xffff)
@@ -816,18 +839,18 @@ pub const Dir = union(enum) {
         }
 
         pub fn next(iterator: *EntryIterator) !?Entry {
-            return switch (iterator) {
-                inline else => |iterator_version| try iterator_version.next(),
+            return switch (iterator.*) {
+                inline else => |*iterator_version| try iterator_version.next(),
             };
         }
         pub fn peek(iterator: *EntryIterator) !?Entry {
-            return switch (iterator) {
-                inline else => |iterator_version| try iterator_version.peek(),
+            return switch (iterator.*) {
+                inline else => |*iterator_version| try iterator_version.peek(),
             };
         }
         pub fn reset(iterator: *EntryIterator) void {
-            return switch (iterator) {
-                inline else => |iterator_version| iterator_version.reset(),
+            return switch (iterator.*) {
+                inline else => |*iterator_version| iterator_version.reset(),
             };
         }
     };
@@ -836,7 +859,7 @@ pub const Dir = union(enum) {
         @"0": Entry.Version0,
         const Version0 = struct {
             inode_id: u16,
-            name: *[entry_size]u8,
+            name: *[name_len]u8,
 
             const entry_size = 128;
             const name_len = entry_size - @sizeOf(Inode.Id);

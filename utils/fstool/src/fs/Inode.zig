@@ -10,9 +10,16 @@ pub const Inode = union(enum) {
 
     pub const Id = u16;
 
+    const Kind = enum(u3) {
+        directory,
+        file,
+        symlink,
+        _,
+    };
+
     const Version0 = struct {
         valid: bool,
-        kind: Version0.Kind,
+        kind: Kind,
         readable: bool,
         writeable: bool,
         executable: bool, // for a directory, this means it can be entered
@@ -29,13 +36,6 @@ pub const Inode = union(enum) {
         indirect_block_index: u16, // points to a block of direct block indices, 0 if no block is associated
 
         id: Id, // not written to storage
-
-        const Kind = enum(u3) {
-            directory,
-            file,
-            symlink,
-            _,
-        };
 
         const inode_size = 32;
         const inodes_per_block = common.block_size / inode_size;
@@ -258,7 +258,7 @@ pub const Inode = union(enum) {
                 \\inode id: {x:0>4}
                 \\kind: {s}
                 \\permissions: {}
-                \\hard link count: {d}
+                \\hard links: {d}
             ,
                 .{
                     inode.id,
@@ -270,7 +270,8 @@ pub const Inode = union(enum) {
 
             if (inode.kind == .file) {
                 try writer.print(
-                    \\file size: {x:0>6}
+                    \\
+                    \\size: {x}
                 ,
                     .{
                         inode.fileSize(),
@@ -292,22 +293,22 @@ pub const Inode = union(enum) {
             writer: anytype,
         ) !void {
             try writer.print(
-                "{c}{c}{c}",
+                "{s}{s}{s}",
                 .{
                     if (permissions.readable orelse false)
-                        'r'
+                        "r"
                     else
-                        '-',
+                        "-",
 
                     if (permissions.writable orelse false)
-                        'w'
+                        "w"
                     else
-                        '-',
+                        "-",
 
                     if (permissions.executable orelse false)
-                        'x'
+                        "x"
                     else
-                        '-',
+                        "-",
                 },
             );
         }
@@ -340,7 +341,7 @@ pub const Inode = union(enum) {
 
     pub fn blockIndexIterator(
         inode: Inode,
-        indirect_block_contents: *[common.block_size]u8,
+        indirect_block_buffer: *[common.block_size]u8,
         storage: std.fs.File,
     ) !BlockIndexIterator {
         return switch (inode) {
@@ -348,10 +349,23 @@ pub const Inode = union(enum) {
             // maybe an explicit tag type would allow use of `inline else`?
             .@"0" => |inode_version| try BlockIndexIterator.Version0.init(
                 inode_version,
-                indirect_block_contents,
+                indirect_block_buffer,
                 storage,
             ),
         };
+    }
+
+    pub fn usedDataBlocks(
+        inode: Inode,
+        storage: std.fs.File,
+    ) !usize {
+        var indirect_block_buffer: [common.block_size]u8 = undefined;
+
+        var index_iterator = try inode.blockIndexIterator(&indirect_block_buffer, storage);
+
+        index_iterator.seekTo(common.max_inode_data_blocks);
+
+        return index_iterator.getIndex();
     }
 
     pub fn idToAddress(inode_id: Id, superblock: SuperBlock) !u27 {
@@ -423,13 +437,7 @@ pub const Inode = union(enum) {
         };
     }
 
-    pub fn Kind(inode: Inode) type {
-        return switch (inode) {
-            inline else => |inode_version| inode_version.Kind,
-        };
-    }
-
-    pub fn kind(inode: Inode) Kind(inode) {
+    pub fn kind(inode: Inode) Kind {
         return switch (inode) {
             inline else => |inode_version| inode_version.kind,
         };
@@ -460,14 +468,14 @@ pub const Inode = union(enum) {
 
             fn init(
                 inode: Inode.Version0,
-                indirect_block_contents: *[common.block_size]u8,
+                indirect_block_buffer: *[common.block_size]u8,
                 storage: std.fs.File,
             ) !BlockIndexIterator {
                 const indirect_exists = inode.indirect_block_index != 0;
 
                 const indirect_block = if (indirect_exists)
                     try Block.read(
-                        indirect_block_contents,
+                        indirect_block_buffer,
                         inode.indirect_block_index,
                         storage,
                     )
@@ -545,10 +553,8 @@ pub const Inode = union(enum) {
             fn seekTo(iterator: *BlockIndexIterator.Version0, index: usize) bool {
                 iterator.reset();
 
-                // 0xffff is more blocks than can be allocated anyways
                 if (index > common.max_inode_data_blocks) {
-                    _ = iterator.seekBy(common.max_inode_data_blocks + 1); // seek to end
-                    return false;
+                    return iterator.seekBy(common.max_inode_data_blocks); // seek to end
                 }
 
                 return iterator.seekBy(@intCast(index)); // in range, as per above if statement
@@ -579,7 +585,7 @@ pub const Inode = union(enum) {
             }
         }
 
-        // returns false if no items left, true otherwise
+        /// returns false if no items left, true otherwise
         pub fn seekBy(iterator: *BlockIndexIterator, count: isize) bool {
             switch (iterator.*) {
                 inline else => |*iterator_version| {
@@ -587,13 +593,19 @@ pub const Inode = union(enum) {
                 },
             }
         }
-        // returns false if no items left, true otherwise
+        /// returns false if no items left, true otherwise
         pub fn seekTo(iterator: *BlockIndexIterator, index: usize) bool {
             switch (iterator.*) {
                 inline else => |*iterator_version| {
                     return iterator_version.seekTo(index);
                 },
             }
+        }
+
+        pub fn getIndex(iterator: BlockIndexIterator) usize {
+            return switch (iterator) {
+                inline else => |iterator_version| iterator_version.index,
+            };
         }
     };
 };
