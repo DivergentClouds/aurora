@@ -69,7 +69,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    if (args.len <= 2) {
+    if (args.len < 2) {
         try printHelp(null, std.io.getStdErr().writer());
         return error.NoCommandGiven;
     }
@@ -79,7 +79,7 @@ pub fn main() !void {
 
     const storage = switch (command) {
         .help => undefined,
-        else => try std.fs.cwd().createFile(args[args.len - 1], .{ .truncate = false }),
+        else => try std.fs.cwd().createFile(args[args.len - 1], .{ .truncate = false, .read = true }),
     };
     try runCommand(command, storage, allocator);
 }
@@ -294,8 +294,8 @@ fn parseCommand(
     const command = try getCommand(strings[0]);
 
     const args_len: usize = switch (command) {
-        .help => strings.len,
-        else => strings.len - 1,
+        .help => strings.len - 1, // exclude command
+        else => strings.len - 2, // exclude command and storage
     };
 
     switch (command) {

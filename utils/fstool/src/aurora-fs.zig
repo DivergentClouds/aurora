@@ -8,6 +8,6 @@ pub const Block = @import("fs/Block.zig");
 pub const common = @import("fs/common.zig");
 pub const bitmap = @import("fs/bitmap.zig");
 
-test "check for compile errors" {
+test "check" {
     std.testing.refAllDeclsRecursive(@This());
 }

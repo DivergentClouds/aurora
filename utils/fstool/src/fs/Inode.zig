@@ -8,8 +8,6 @@ const common = @import("common.zig");
 pub const Inode = union(enum) {
     @"0": Version0,
 
-    pub const Id = u16;
-
     const Kind = enum(u3) {
         directory,
         file,
@@ -35,13 +33,13 @@ pub const Inode = union(enum) {
         direct_block_indices: [8]u16, // points to a data block, 0 if no block is associated
         indirect_block_index: u16, // points to a block of direct block indices, 0 if no block is associated
 
-        id: Id, // not written to storage
+        id: u16, // not written to storage
 
         const inode_size = 32;
         const inodes_per_block = common.block_size / inode_size;
 
         fn read(
-            inode_id: Id,
+            inode_id: u16,
             superblock: SuperBlock,
             storage: std.fs.File,
         ) !Inode {
@@ -104,10 +102,10 @@ pub const Inode = union(enum) {
         }
 
         fn idToAddress(
-            inode_id: Id,
+            inode_id: u16,
             superblock: SuperBlock,
         ) u27 {
-            const block_offset = inode_id / inodes_per_block;
+            const block_offset: u27 = inode_id / inodes_per_block;
             const block_index = superblock.@"0".first_inode_block + block_offset;
             const offset_in_block = (inode_id % inodes_per_block) * inode_size;
 
@@ -160,7 +158,7 @@ pub const Inode = union(enum) {
             try copied_inode.write(superblock.*, storage);
         }
 
-        /// adds a new block to a directory for entries
+        /// adds a new block to an inode
         /// returns index of new block
         fn extendData(
             inode: *Version0,
@@ -170,24 +168,26 @@ pub const Inode = union(enum) {
             const file_len: u24 = (@as(u24, inode.file_size_upper) << 16) +
                 inode.file_size_lower;
 
-            if (file_len +| common.block_size > common.max_executable_size) {
+            if (inode.executable and file_len +| common.block_size > common.max_executable_size) {
                 return error.ExecutableFileTooLarge;
             }
 
-            var free_block_index = try bitmap.nextFree(0, .data, superblock.*, storage) orelse
+            var free_data_index = try bitmap.nextFree(0, .data, superblock.*, storage) orelse
                 return error.NoFreeDataBlocks;
+            var free_block_index = free_data_index + superblock.@"0".first_data_block;
 
             var contents: [common.block_size]u8 = @splat(0);
             var indirect_indices: [common.block_size]u8 = undefined;
 
             for (inode.direct_block_indices, 0..) |direct_index, index_number| {
                 if (direct_index == 0) {
-                    try bitmap.allocate(0, free_block_index, .data, superblock, storage);
+                    try bitmap.allocate(0, free_data_index, .data, superblock, storage);
 
                     const block = try Block.new(&contents);
                     try block.write(free_block_index, storage);
 
                     inode.direct_block_indices[index_number] = free_block_index;
+
                     try inode.write(superblock.*, storage);
 
                     return free_block_index;
@@ -195,7 +195,7 @@ pub const Inode = union(enum) {
             }
 
             if (inode.indirect_block_index == 0) {
-                try bitmap.allocate(0, free_block_index, .data, superblock, storage);
+                try bitmap.allocate(0, free_data_index, .data, superblock, storage);
 
                 inode.indirect_block_index = free_block_index;
                 try inode.write(superblock.*, storage);
@@ -203,8 +203,9 @@ pub const Inode = union(enum) {
                 const block = try Block.new(&contents);
                 try block.write(free_block_index, storage);
 
-                free_block_index = try bitmap.nextFree(0, .data, superblock.*, storage) orelse
+                free_data_index = try bitmap.nextFree(0, .data, superblock.*, storage) orelse
                     return error.NoFreeDataBlocks;
+                free_block_index = free_data_index + superblock.@"0".first_data_block;
             }
 
             var indirect_block = try Block.read(&indirect_indices, inode.indirect_block_index, storage);
@@ -214,7 +215,11 @@ pub const Inode = union(enum) {
                 const direct_index: u16 = std.mem.readInt(u16, indirect_indices[i .. i + 2][0..2], .little);
 
                 if (direct_index == 0) {
-                    try bitmap.allocate(0, free_block_index, .data, superblock, storage);
+                    free_data_index = try bitmap.nextFree(0, .data, superblock.*, storage) orelse
+                        return error.NoFreeDataBlocks;
+                    free_block_index = free_data_index + superblock.@"0".first_data_block;
+
+                    try bitmap.allocate(0, free_data_index, .data, superblock, storage);
 
                     const block = try Block.new(&contents);
                     try block.write(free_block_index, storage);
@@ -316,7 +321,7 @@ pub const Inode = union(enum) {
 
     pub fn read(
         version: u16,
-        inode_id: Id,
+        inode_id: u16,
         superblock: SuperBlock,
         storage: std.fs.File,
     ) !Inode {
@@ -363,12 +368,12 @@ pub const Inode = union(enum) {
 
         var index_iterator = try inode.blockIndexIterator(&indirect_block_buffer, storage);
 
-        index_iterator.seekTo(common.max_inode_data_blocks);
+        _ = index_iterator.seekTo(common.max_inode_data_blocks);
 
         return index_iterator.getIndex();
     }
 
-    pub fn idToAddress(inode_id: Id, superblock: SuperBlock) !u27 {
+    pub fn idToAddress(inode_id: u16, superblock: SuperBlock) !u27 {
         return switch (superblock.version()) {
             0 => Version0.idToAddress(inode_id, superblock),
             else => return error.UnsupportedVersion,
@@ -429,9 +434,9 @@ pub const Inode = union(enum) {
         };
     }
 
-    pub fn address(inode: Inode) u27 {
+    pub fn address(inode: Inode, superblock: SuperBlock) u27 {
         return switch (inode) {
-            .@"0" => idToAddress(0, inode.id()) catch |err| switch (err) {
+            .@"0" => idToAddress(inode.id(), superblock) catch |err| switch (err) {
                 error.UnsupportedVersion => unreachable,
             },
         };

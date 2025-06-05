@@ -10,7 +10,7 @@ pub fn changePerms(
     var superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
 
     var inode = try root.openInodePath(path, superblock, storage, allocator);
     inode.setPermissions(permissions);
@@ -25,7 +25,7 @@ pub fn printInfo(
     const superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
 
     const inode = try root.openInodePath(path, superblock, storage, allocator);
 
@@ -42,14 +42,19 @@ pub fn listDir(
     const superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
 
     var entry_block_buffer: [afs.common.block_size]u8 = @splat(0);
     var indirect_block_buffer: [afs.common.block_size]u8 = @splat(0);
 
     const dir = try root.openDirPath(path, superblock, storage, allocator);
 
-    var entry_iterator = try dir.entryIterator(&entry_block_buffer, &indirect_block_buffer, storage);
+    var entry_iterator = try dir.entryIterator(
+        &entry_block_buffer,
+        &indirect_block_buffer,
+        superblock,
+        storage,
+    );
 
     const stdout = std.io.getStdOut().writer();
     while (try entry_iterator.next()) |entry| {
@@ -65,7 +70,7 @@ pub fn delete(
     var superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
 
     const inode = try root.openInodePath(path, superblock, storage, allocator);
 
@@ -131,7 +136,7 @@ pub fn storeFile(
     var superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    var dir = try afs.Dir.root(superblock, storage);
+    var dir: afs.Dir = .root(superblock);
 
     var path_tokens = std.mem.tokenizeScalar(u8, output_path, '/');
     const output_name: []const u8 = while (path_tokens.next()) |subpath| {
@@ -141,7 +146,8 @@ pub fn storeFile(
         const subpath_z = try allocator.dupeZ(u8, subpath);
         defer allocator.free(subpath_z);
 
-        const dir_permissions = dir.inode().getPermissions();
+        const dir_inode: afs.Inode = try .read(0, dir.inodeId(), superblock, storage);
+        const dir_permissions = dir_inode.getPermissions();
 
         dir = try dir.openDir(subpath_z, superblock, storage) orelse
             try dir.createDir(
@@ -186,7 +192,7 @@ pub fn loadFile(
     var superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
 
     const input_file = try root.openFilePath(input_path, superblock, storage, allocator);
     const file_contents = try input_file.read(storage, allocator);
@@ -206,7 +212,7 @@ pub fn createDir(
     var superblock = try afs.SuperBlock.read(storage);
     try superblock.verify();
 
-    const root = try afs.Dir.root(superblock, storage);
+    const root: afs.Dir = .root(superblock);
     _ = try root.createDirPath(path, permissions, &superblock, storage, allocator);
 }
 
@@ -225,6 +231,9 @@ pub fn format(
 
     const bootblock_file = try std.fs.cwd().openFile(bootblock_name, .{});
     defer bootblock_file.close();
+
+    if (try bootblock_file.getEndPos() > afs.common.block_size)
+        return error.BootblockTooLarge;
 
     _ = try bootblock_file.reader().readAll(&bootblock);
 
@@ -266,6 +275,14 @@ pub fn format(
         },
     };
 
+    try storage.seekTo(0);
+
+    // faster than storage.writer().writeByteNTimes
+    const empty_block: [afs.common.block_size]u8 = @splat(0);
+    for (0..afs.common.blocks_in_storage) |_| {
+        try storage.writeAll(&empty_block);
+    }
+
     try superblock.verify();
     try superblock.write(storage);
 
@@ -293,19 +310,16 @@ pub fn format(
         },
     };
 
+    // allocate first inode block
     try afs.bitmap.allocate(0, 0, .inode, &superblock, storage);
 
-    try root_inode.write(superblock, storage);
+    //    try root_inode.write(superblock, storage);
 
-    var root: afs.Dir = .{
-        .@"0" = .{
-            .inode = root_inode,
-        },
-    };
+    var root: afs.Dir = .root(superblock);
 
-    try root.createHardLink(".", &root_inode, &superblock, storage);
-    try root.createHardLink("..", &root_inode, &superblock, storage);
+    try root.createHardLink(".", root_inode.id(), &superblock, storage);
+    try root.createHardLink("..", root_inode.id(), &superblock, storage);
 
     try superblock.write(storage);
-    try root_inode.write(superblock, storage);
+    //   try root_inode.write(superblock, storage);
 }

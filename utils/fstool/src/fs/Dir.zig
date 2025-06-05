@@ -11,13 +11,16 @@ pub const Dir = union(enum) {
     @"0": Version0,
 
     const Version0 = struct {
-        inode: Inode,
+        inode_id: u16,
 
+        // FIXME: returns null when it shouldn't
         fn nextFreeEntryAddress(
             dir: Version0,
+            superblock: SuperBlock,
             storage: std.fs.File,
         ) !?u27 {
-            const dir_inode_version = dir.inode.@"0";
+            const dir_inode: Inode = try .read(0, dir.inode_id, superblock, storage);
+            const dir_inode_version = dir_inode.@"0";
 
             var entries: [common.block_size]u8 = undefined;
 
@@ -76,13 +79,14 @@ pub const Dir = union(enum) {
         fn findEntryAddress(
             dir: Version0,
             name: [:0]const u8,
+            superblock: SuperBlock,
             storage: std.fs.File,
         ) !?u27 {
             if (name.len >= Entry.Version0.name_len) {
                 return error.NameTooLong;
             }
 
-            const dir_inode_version = dir.inode.@"0";
+            const dir_inode_version = (try Inode.read(0, dir.inode_id, superblock, storage)).@"0";
 
             var entries: [common.block_size]u8 = undefined;
 
@@ -100,9 +104,12 @@ pub const Dir = union(enum) {
                         0,
                         entries[entry_id * Entry.Version0.entry_size .. (entry_id + 1) * Entry.Version0.entry_size],
                     );
-
                     if (entry.@"0".inode_id == 0xffff) {
-                        return null;
+                        break;
+                    }
+
+                    if (entry.@"0".name[0] == 0) {
+                        continue;
                     }
 
                     if (entry.eql(name)) {
@@ -134,7 +141,7 @@ pub const Dir = union(enum) {
                     );
 
                     if (entry.@"0".inode_id == 0xffff) {
-                        return null;
+                        break;
                     }
 
                     if (entry.eql(name)) {
@@ -159,10 +166,12 @@ pub const Dir = union(enum) {
         fn findId(
             dir: Version0,
             name: [:0]const u8,
+            superblock: SuperBlock,
             storage: std.fs.File,
         ) !?u16 {
             const entry_address = try dir.findEntryAddress(
                 name,
+                superblock,
                 storage,
             ) orelse return null;
 
@@ -177,6 +186,7 @@ pub const Dir = union(enum) {
         ) !?Inode {
             const id = try dir.findId(
                 name,
+                superblock,
                 storage,
             ) orelse return null;
 
@@ -196,6 +206,7 @@ pub const Dir = union(enum) {
         ) !void {
             const entry_address = try dir.findEntryAddress(
                 name,
+                superblock.*,
                 storage,
             ) orelse return error.FileNotFound;
 
@@ -234,11 +245,12 @@ pub const Dir = union(enum) {
             var child_dir = try Dir.openDir(.{ .@"0" = dir }, name, superblock.*, storage) orelse
                 return error.DirectoryNotFound;
 
-            if (!try child_dir.@"0".isEmpty(storage))
+            if (!try child_dir.@"0".isEmpty(superblock.*, storage))
                 return error.DirectoryNotEmpty;
 
             const entry_address = try dir.findEntryAddress(
                 name,
+                superblock.*,
                 storage,
             ) orelse unreachable; // we already made sure the directory exists
 
@@ -267,11 +279,11 @@ pub const Dir = union(enum) {
         fn createHardLink(
             dir: *Version0,
             name: [:0]const u8,
-            inode_to_link: *Inode,
+            inode_to_link_id: u16,
             superblock: *SuperBlock,
             storage: std.fs.File,
         ) !void {
-            if (try dir.findEntryAddress(name, storage) != null) {
+            if (try dir.findEntryAddress(name, superblock.*, storage) != null) {
                 return error.FileAlreadyExists;
             }
 
@@ -285,6 +297,7 @@ pub const Dir = union(enum) {
                 return error.InvalidName;
             }
 
+            var inode_to_link: Inode = try .read(0, inode_to_link_id, superblock.*, storage);
             if (inode_to_link.@"0".hard_link_count == 0xffff) {
                 return error.TooManyHardLinksToInode;
             }
@@ -292,8 +305,13 @@ pub const Dir = union(enum) {
             var name_memory: [126]u8 = @splat(0);
             @memcpy(name_memory[0..name.len], name);
 
-            const next_address = try dir.nextFreeEntryAddress(storage) orelse
-                try dir.inode.extendData(superblock, storage) * common.block_size;
+            var dir_inode: Inode = try .read(0, dir.inode_id, superblock.*, storage);
+
+            const next_address = try dir.nextFreeEntryAddress(superblock.*, storage) orelse
+                @as(u27, try dir_inode.extendData(superblock, storage)) * common.block_size;
+
+            if (inode_to_link_id == dir.inode_id) // prevent overwriting new inode with old version
+                inode_to_link = try .read(0, inode_to_link_id, superblock.*, storage);
 
             inode_to_link.@"0".hard_link_count += 1;
 
@@ -305,6 +323,8 @@ pub const Dir = union(enum) {
             };
 
             try entry.write(storage, next_address);
+
+            try inode_to_link.write(superblock.*, storage);
         }
 
         fn createFile(
@@ -314,7 +334,7 @@ pub const Dir = union(enum) {
             superblock: *SuperBlock,
             storage: std.fs.File,
         ) !File {
-            if (try dir.findEntryAddress(name, storage) != null) {
+            if (try dir.findEntryAddress(name, superblock.*, storage) != null) {
                 return error.FileAlreadyExists;
             }
 
@@ -338,9 +358,11 @@ pub const Dir = union(enum) {
                 },
             };
 
+            try file_inode.write(superblock.*, storage);
+
             try dir.createHardLink(
                 name,
-                &file_inode,
+                inode_id,
                 superblock,
                 storage,
             );
@@ -360,14 +382,14 @@ pub const Dir = union(enum) {
             superblock: *SuperBlock,
             storage: std.fs.File,
         ) !Dir {
-            if (try dir.findEntryAddress(name, storage) != null) {
+            if (try dir.findEntryAddress(name, superblock.*, storage) != null) {
                 return error.FileAlreadyExists;
             }
 
-            const inode_id = try bitmap.nextFree(0, .inode, superblock.*, storage) orelse
+            const subdir_inode_id = try bitmap.nextFree(0, .inode, superblock.*, storage) orelse
                 return error.NoFreeInodes;
 
-            var dir_inode: Inode = .{
+            var subdir_inode: Inode = .{
                 .@"0" = .{
                     .valid = true,
                     .kind = .directory,
@@ -380,37 +402,39 @@ pub const Dir = union(enum) {
                     .direct_block_indices = @splat(0),
                     .indirect_block_index = 0,
 
-                    .id = inode_id,
+                    .id = subdir_inode_id,
                 },
             };
 
+            try subdir_inode.write(superblock.*, storage);
+
             try dir.createHardLink(
                 name,
-                &dir_inode,
+                subdir_inode_id,
                 superblock,
                 storage,
             );
 
             var sub_dir: Dir = .{
-                .@"0" = .{ .inode = dir_inode },
+                .@"0" = .{ .inode_id = subdir_inode_id },
             };
 
-            try sub_dir.@"0".createHardLink(".", &dir_inode, superblock, storage);
-            try sub_dir.@"0".createHardLink("..", &dir_inode, superblock, storage);
+            try sub_dir.@"0".createHardLink(".", subdir_inode_id, superblock, storage);
+            try sub_dir.@"0".createHardLink("..", subdir_inode_id, superblock, storage);
 
-            try dir_inode.write(
+            try subdir_inode.write(
                 superblock.*,
                 storage,
             );
 
-            return .{ .@"0" = .{ .inode = dir_inode } };
+            return .{ .@"0" = .{ .inode_id = subdir_inode_id } };
         }
 
-        fn isEmpty(dir: Version0, storage: std.fs.File) !bool {
+        fn isEmpty(dir: Version0, superblock: SuperBlock, storage: std.fs.File) !bool {
             var entry_block_buffer: [common.block_size]u8 = undefined;
             var indirect_block_buffer: [common.block_size]u8 = undefined;
 
-            var dir_iterator = try (Dir{ .@"0" = dir }).entryIterator(&entry_block_buffer, &indirect_block_buffer, storage);
+            var dir_iterator = try (Dir{ .@"0" = dir }).entryIterator(&entry_block_buffer, &indirect_block_buffer, superblock, storage);
 
             while (try dir_iterator.next()) |entry| {
                 if (!entry.eql("..") and !entry.eql("."))
@@ -448,7 +472,7 @@ pub const Dir = union(enum) {
                 return @unionInit(
                     Dir,
                     @tagName(dir),
-                    .{ .inode = found_inode },
+                    .{ .inode_id = found_inode.id() },
                 );
             },
         }
@@ -571,15 +595,19 @@ pub const Dir = union(enum) {
         else
             path.len;
 
-        const parent_dir_path_index = std.mem.lastIndexOfScalar(u8, path[0..end_index], '/') orelse 0;
+        const parent_dir_path_len = (std.mem.lastIndexOfScalar(u8, path[0..end_index], '/') orelse 0) + 1;
 
-        const parent_dir_path = path[0..parent_dir_path_index];
-        const name = path[parent_dir_path_index..];
+        const parent_dir_path = path[0..parent_dir_path_len];
+        const name = path[parent_dir_path_len..];
+
+        var parent_dir = try dir.openDirPath(parent_dir_path, superblock, storage, allocator);
+
+        if (name.len == 0)
+            return try Inode.read(dir.getVersion(), parent_dir.inodeId(), superblock, storage);
 
         const name_z = try allocator.dupeZ(u8, name);
         defer allocator.free(name_z);
 
-        var parent_dir = try dir.openDirPath(parent_dir_path, superblock, storage, allocator);
         return try parent_dir.openInode(name_z, superblock, storage) orelse
             return error.InodeNotFound;
     }
@@ -587,21 +615,15 @@ pub const Dir = union(enum) {
     // Open the root directory
     pub fn root(
         superblock: SuperBlock,
-        storage: std.fs.File,
-    ) !Dir {
+    ) Dir {
         const version = superblock.version();
         switch (version) {
             0 => return Dir{
                 .@"0" = .{
-                    .inode = try Inode.read(
-                        version,
-                        0,
-                        superblock,
-                        storage,
-                    ),
+                    .inode_id = 0,
                 },
             },
-            else => return error.UnsupportedVersion,
+            else => std.debug.panic("Unsupported version: {d}\n", .{version}),
         }
     }
 
@@ -635,14 +657,14 @@ pub const Dir = union(enum) {
     pub fn createHardLink(
         dir: *Dir,
         name: [:0]const u8,
-        inode_to_link: *Inode,
+        inode_to_link_id: u16,
         superblock: *SuperBlock,
         storage: std.fs.File,
     ) !void {
         switch (dir.*) {
             inline else => |*dir_version| try dir_version.createHardLink(
                 name,
-                inode_to_link,
+                inode_to_link_id,
                 superblock,
                 storage,
             ),
@@ -710,9 +732,15 @@ pub const Dir = union(enum) {
         return current_dir;
     }
 
-    pub fn inode(dir: Dir) Inode {
+    pub fn inodeId(dir: Dir) u16 {
         return switch (dir) {
-            inline else => |dir_version| dir_version.inode,
+            inline else => |dir_version| dir_version.inode_id,
+        };
+    }
+
+    pub fn getVersion(dir: Dir) u16 {
+        return switch (dir) {
+            .@"0" => 0,
         };
     }
 
@@ -720,6 +748,7 @@ pub const Dir = union(enum) {
         dir: Dir,
         entry_block_buffer: *[common.block_size]u8,
         indirect_block_buffer: *[common.block_size]u8,
+        superblock: SuperBlock,
         storage: std.fs.File,
     ) !EntryIterator {
         return switch (dir) {
@@ -727,6 +756,7 @@ pub const Dir = union(enum) {
                 dir_version,
                 entry_block_buffer,
                 indirect_block_buffer,
+                superblock,
                 storage,
             ),
         };
@@ -736,7 +766,7 @@ pub const Dir = union(enum) {
         @"0": EntryIterator.Version0,
 
         const Version0 = struct {
-            dir: Dir.Version0,
+            dir_inode: Inode,
             index: usize,
             entries_block: ?Block,
             entry_index_in_block: usize,
@@ -747,9 +777,12 @@ pub const Dir = union(enum) {
                 dir: Dir.Version0,
                 entry_block_buffer: *[common.block_size]u8,
                 indirect_block_buffer: *[common.block_size]u8,
+                superblock: SuperBlock,
                 storage: std.fs.File,
             ) !EntryIterator {
-                const first_entry_block_index = dir.inode.@"0".direct_block_indices[0];
+                const inode: Inode = try .read(0, dir.inode_id, superblock, storage);
+
+                const first_entry_block_index = inode.@"0".direct_block_indices[0];
                 const entries_block: ?Block = if (first_entry_block_index == 0)
                     null
                 else
@@ -761,11 +794,11 @@ pub const Dir = union(enum) {
 
                 return .{
                     .@"0" = EntryIterator.Version0{
-                        .dir = dir,
+                        .dir_inode = inode,
                         .index = 0,
                         .entries_block = entries_block,
                         .entry_index_in_block = 0,
-                        .block_index_iterator = try dir.inode.blockIndexIterator(indirect_block_buffer, storage),
+                        .block_index_iterator = try inode.blockIndexIterator(indirect_block_buffer, storage),
                         .storage = storage,
                     },
                 };
@@ -819,7 +852,7 @@ pub const Dir = union(enum) {
                 const entries_block = iterator.entries_block orelse
                     return;
 
-                try Block.read(
+                _ = try Block.read(
                     entries_block.contents,
                     iterator.block_index_iterator.peek() orelse return,
                     iterator.storage,
@@ -845,12 +878,12 @@ pub const Dir = union(enum) {
         }
         pub fn peek(iterator: *EntryIterator) !?Entry {
             return switch (iterator.*) {
-                inline else => |*iterator_version| try iterator_version.peek(),
+                inline else => |*iterator_version| iterator_version.peek(),
             };
         }
-        pub fn reset(iterator: *EntryIterator) void {
+        pub fn reset(iterator: *EntryIterator) !void {
             return switch (iterator.*) {
-                inline else => |*iterator_version| iterator_version.reset(),
+                inline else => |*iterator_version| try iterator_version.reset(),
             };
         }
     };
@@ -862,7 +895,7 @@ pub const Dir = union(enum) {
             name: *[name_len]u8,
 
             const entry_size = 128;
-            const name_len = entry_size - @sizeOf(Inode.Id);
+            const name_len = entry_size - 2; // 2 bytes for inode_id
             /// 16
             const entries_per_block = common.block_size / entry_size;
 
