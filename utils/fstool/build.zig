@@ -64,6 +64,15 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
 
+    const check_unit_tests = b.addTest(.{
+        .root_source_file = b.path("src/aurora-fs.zig"),
+        .target = target,
+        .optimize = optimize,
+        .filter = "check",
+    });
+    const run_check_unit_tests = b.addRunArtifact(check_unit_tests);
+
     const check_step = b.step("check", "Check that the program compiles");
+    check_step.dependOn(&run_check_unit_tests.step);
     check_step.dependOn(&exe.step);
 }
