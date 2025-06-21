@@ -77,7 +77,11 @@ Entry Formats
     direct_block_indices: [8]u16,       // points to a data block, 0 if no block is associated
     indirect_block_index: u16,          // points to a block of direct block indices, 0 if no block is associated
 
-    reserved: [8]u8,                    // (reserved)
+    time_created: u16,                  // counts in 2 second increments since midnight
+    date_created: u16,                  // counts in days since Jan 1st 1970
+
+    time_modified: u16,                  // counts in 2 second increments since midnight
+    date_modified: u16,                  // counts in days since Jan 1st 1970
   }
 
   // BLOCK_SIZE bytes
